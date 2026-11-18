@@ -59,6 +59,15 @@ five) that every Short's text carries first and never drops, for a streamer's or
 campaign's conditions. It is set through the project options API; there is no
 dashboard field for it yet. The 77 tests that touch the text code pass.
 
+Full check on 2026-11-19: 546 backend tests (the first full run had 6 failures
+and 1 error, all FFmpeg x264 crashes while the PC was out of memory with a
+browser and a typecheck running alongside; all pass when re-run alone), the
+dashboard typechecks, and every page was opened in a browser. One real bug was
+found and fixed: the posting-schedule panel formatted dates with options the
+browser rejects (`weekday` with `dateStyle`), which blanked the whole Generated
+Shorts page. Gmail and YouTube are connected through the new Google Cloud
+project; no email has been sent and no Short uploaded.
+
 ## Next
 
 Phase 11 (Creator Studio) is planned in [PHASE11_PLAN.md](PHASE11_PLAN.md)

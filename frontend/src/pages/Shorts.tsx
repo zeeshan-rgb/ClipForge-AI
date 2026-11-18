@@ -588,7 +588,7 @@ function ScheduleCard() {
     onSuccess: (d) => qc.setQueryData(['schedule'], d),
   })
   if (!s) return status.isError ? <ErrorNote>{status.error.message}</ErrorNote> : null
-  const fmt = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: 'short', dateStyle: 'medium', timeStyle: 'short' })
+  const fmt = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })
   return (
     <div className="card mb-6 p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
