@@ -53,6 +53,12 @@ the architecture notes rule out; the posting schedule's automatic mode
 publishes at set times on the owner's standing consent. The Gmail, YouTube and
 schedule features do nothing until the owner connects those accounts.
 
+A later commit from the macOS copy (2026-11-18, "Required hashtags per
+project") was applied the same day: a project option `required_hashtags` (up to
+five) that every Short's text carries first and never drops, for a streamer's or
+campaign's conditions. It is set through the project options API; there is no
+dashboard field for it yet. The 77 tests that touch the text code pass.
+
 ## Next
 
 Phase 11 (Creator Studio) is planned in [PHASE11_PLAN.md](PHASE11_PLAN.md)

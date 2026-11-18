@@ -76,6 +76,7 @@ class Source:
     url: str | None
     rights_status: str
     language: str | None = None
+    required_hashtags: list[str] = field(default_factory=list)  # a streamer's or campaign's must-have tags
 
 
 @dataclass
@@ -122,9 +123,10 @@ Return JSON with one entry per clip, using the clip numbers given."""
 _HASHTAG = re.compile(r"[^\w]", re.UNICODE)
 
 
-def clean_hashtags(tags: list[str], category: str | None) -> list[str]:
+def clean_hashtags(tags: list[str], category: str | None, required: list[str] | None = None) -> list[str]:
+    """#Shorts last, required tags (a permission's conditions) first and never dropped, the writer's after."""
     out: list[str] = []
-    for t in [*tags, category or "", "Shorts"]:
+    for t in [*(required or []), *tags, category or "", "Shorts"]:
         word = _HASHTAG.sub("", str(t).lstrip("#"))
         if not word or word.isdigit():
             continue
@@ -190,7 +192,7 @@ def plain(c: ClipText, source: Source, music_credit: str | None, why: str) -> Wr
     """Text made without the AI: the category and the first words said."""
     words = c.said.split()
     title = " ".join(words[:8]) + ("…" if len(words) > 8 else "") if words else (c.category or "Clip").capitalize()
-    tags = clean_hashtags([], c.category)
+    tags = clean_hashtags([], c.category, source.required_hashtags)
     body = c.reason or ""
     return Written(clean_title(title, c.part, c.parts),
                    compose_description(body, source, music_credit, tags, c.part, c.parts), tags,
@@ -221,7 +223,7 @@ def write(
         if not a or not str(a.get("title", "")).strip():
             out[c.id] = plain(c, source, credit, why or "The AI gave no text for this clip, so a plain one was made.")
             continue
-        tags = clean_hashtags(list(a.get("hashtags") or []), c.category)
+        tags = clean_hashtags(list(a.get("hashtags") or []), c.category, source.required_hashtags)
         notes = []
         title = clean_title(a["title"], c.part, c.parts)
         if len(" ".join(str(a["title"]).split())) > TITLE_AIM:

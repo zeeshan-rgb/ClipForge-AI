@@ -183,3 +183,16 @@ def test_lines_never_overlap_and_stay_inside_the_clip():
     spans = sorted((l["at"], l["at"] + st.estimate_seconds(l["text"])) for l in story["lines"])
     assert all(b1 + st.LINE_GAP - 0.011 <= a2 for (_, b1), (a2, _) in zip(spans, spans[1:])), spans
     assert spans[-1][1] <= 27.1 and spans[0][0] >= 0
+
+
+def test_required_hashtags_always_come_first_and_survive_the_limit():
+    from clipforge import metadata as md
+
+    many = [f"#tag{n}" for n in range(12)]
+    tags = md.clean_hashtags(many, "funny", ["#LACY"])
+    assert tags[0] == "#LACY" and tags[-1] == "#Shorts" and len(tags) <= md.HASHTAGS_MAX
+    assert md.clean_hashtags(["#lacy", "#gta6"], None, ["LACY"]) == ["#LACY", "#gta6", "#Shorts"]
+    src = md.Source(title=None, original_title=None, creator="Lacy", channel=None, platform="twitch",
+                    url="https://www.twitch.tv/videos/1", rights_status="licensed", required_hashtags=["#LACY"])
+    w = md.plain(md.ClipText(id=1, category="funny", reason=None, said="no way", duration=20), src, None, "x")
+    assert "#LACY" in w.description and w.hashtags[0] == "#LACY"

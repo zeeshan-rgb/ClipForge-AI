@@ -1096,6 +1096,7 @@ def _write_text(ctx: StageContext) -> dict:
             title=project.title, original_title=meta.get("title"), creator=project.creator,
             channel=meta.get("creator"), platform=project.source_kind, url=project.source_url,
             rights_status=project.rights_status, language=((project.analysis or {}).get("transcript") or {}).get("language"),
+            required_hashtags=list((project.options or {}).get("required_hashtags") or []),
         )
         clips = [
             md.ClipText(

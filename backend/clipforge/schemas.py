@@ -58,6 +58,8 @@ class ProjectOptions(BaseModel):
     part_labels: bool = True  # "PART 1/2" over the opening seconds of connected parts
     # Phase 9: a small "@creator" on screen for clips from someone else's video
     credit_tag: bool = True
+    # hashtags every Short of this project must carry, for example a streamer's or a campaign's condition
+    required_hashtags: list[str] = Field(default_factory=list, max_length=5)
 
     @model_validator(mode="before")
     @classmethod
