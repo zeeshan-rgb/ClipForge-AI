@@ -228,6 +228,42 @@ def analyse_track(settings: Settings, path: Path) -> dict[str, Any]:
     return out
 
 
+YT_AUDIO_LIBRARY = {
+    "source": "YouTube Audio Library (YouTube Studio → Audio Library), downloaded by the channel owner",
+    "licence_name": "YouTube Audio Library licence",
+    "licence_url": "https://support.google.com/youtube/answer/3376882",
+}
+
+
+def estimate_moods(analysis: dict[str, Any], name: str = "") -> list[str]:
+    """A first guess at a track's moods from its tempo, beat strength and level. The owner can correct it.
+
+    Measured only; no AI. Slow or beatless and quiet reads as suspense or emotional, a bouncy mid tempo as
+    comedic, fast as energetic, fast and loud as intense.
+    """
+    bpm, pulse, level = analysis.get("bpm"), float(analysis.get("pulse") or 0), float(analysis.get("loudness_db") or -20)
+    words = name.lower()
+    hinted = [m for m, keys in {"comedic": ("funny", "comic", "silly", "quirky", "goofy", "bouncy"),
+                                "suspense": ("suspense", "dark", "mystery", "tense", "horror", "creep"),
+                                "emotional": ("sad", "piano", "emotional", "tender", "calm"),
+                                "energetic": ("happy", "upbeat", "party", "dance", "summer"),
+                                "intense": ("rock", "metal", "epic", "battle", "action"),
+                                "dramatic": ("drama", "cinematic", "trailer")}.items()
+              if any(k in words for k in keys)]
+    if bpm is None or pulse < 1.15:
+        guess = ["suspense", "emotional"] if level < -22 else ["dramatic", "emotional"]
+    elif bpm < 85:
+        guess = ["emotional", "suspense"] if level < -20 else ["dramatic", "emotional"]
+    elif bpm < 112:
+        guess = ["comedic", "dramatic"] if pulse >= 1.4 else ["dramatic", "emotional"]
+    elif bpm < 135:
+        guess = ["energetic", "comedic"]
+    else:
+        guess = ["intense", "energetic"] if level > -16 else ["energetic", "intense"]
+    out = list(dict.fromkeys(hinted + guess))
+    return out[:2]
+
+
 # ---- choosing a track -----------------------------------------------------------------
 
 

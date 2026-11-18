@@ -359,6 +359,39 @@ function TrackCard({ track, meta }: { track: Track; meta: MusicMeta }) {
   )
 }
 
+function AudioLibraryImport() {
+  const qc = useQueryClient()
+  const [folder, setFolder] = useState('')
+  const run = useMutation({
+    mutationFn: () => api.importMusicFolder(folder.trim()),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['tracks'] }),
+  })
+  return (
+    <div className="mb-5 rounded-md border border-line p-3">
+      <div className="text-sm font-medium">Add a folder from the YouTube Audio Library</div>
+      <p className="hint mt-1">
+        In YouTube Studio → Audio Library, download the tracks you like into one folder (skip ones marked “Attribution
+        required”, or add their credit after). ClipForge records the Audio Library licence, guesses each track's mood
+        from its tempo and energy, and then picks a fitting track for each Short. Correct any mood below.
+      </p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <input aria-label="Folder" className="input min-w-0 flex-1" placeholder="/Users/you/Downloads/Audio Library"
+          value={folder} onChange={(e) => setFolder(e.target.value)} />
+        <button className="btn btn-primary" disabled={!folder.trim() || run.isPending} onClick={() => run.mutate()}>
+          {run.isPending ? 'Analysing…' : 'Import folder'}
+        </button>
+      </div>
+      {run.data && (
+        <p className="mt-2 text-xs text-soft">
+          Added {run.data.added.length}
+          {run.data.skipped.length ? `, skipped ${run.data.skipped.length} (${run.data.skipped.slice(0, 3).map((x) => `${x.file}: ${x.reason}`).join('; ')})` : ''}.
+        </p>
+      )}
+      {run.error && <div className="mt-2"><ErrorNote>{run.error.message}</ErrorNote></div>}
+    </div>
+  )
+}
+
 export function MusicLibrary() {
   const tracks = useQuery({ queryKey: ['tracks'], queryFn: api.tracks })
   const meta = useQuery({ queryKey: ['music-meta'], queryFn: api.musicMeta, staleTime: Infinity })
@@ -380,6 +413,7 @@ export function MusicLibrary() {
         or music you bought). Popular songs get a video claimed or muted. The library starts empty, and Shorts are made
         without music until a licensed track matches the moment.
       </p>
+      <AudioLibraryImport />
       {!meta.data || tracks.isPending ? (
         <Spinner />
       ) : tracks.isError ? (

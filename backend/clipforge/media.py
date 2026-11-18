@@ -245,6 +245,23 @@ class MixSpec:
     channels: int = 2  # channels in the track file
 
 
+@dataclass(frozen=True)
+class VoiceSpec:
+    """The owner's narration for a clip, already placed on the clip's clock.
+
+    `stem` is the narration (48 kHz stereo, the clip's length) and `duck` a
+    stereo gain envelope (0..1) that lowers the clip's own sound while the owner
+    speaks. Both are made by `story.py`.
+    """
+
+    stem: Path
+    duck: Path
+
+
+def _voice_inputs(voice: VoiceSpec | None) -> list[str]:
+    return [] if voice is None else ["-i", str(voice.stem), "-i", str(voice.duck)]
+
+
 def _stereo(channels: int) -> str:
     """Bring a sound to 48 kHz stereo without changing how loud it is.
 
@@ -304,12 +321,15 @@ def render_music_stem(settings: Settings, music: MixSpec, total: float, dest: Pa
 def _audio_graph(
     ranges: list[tuple[float, float]], has_audio: bool, music: MixSpec | None, audio_channels: int,
     src_index: int, music_index: int, total: float, gain_db: float | None = None, peak_limit: float | None = None,
+    voice: VoiceSpec | None = None, voice_index: int | None = None,
 ) -> tuple[list[str], str | None]:
     """The clip's sound (its ranges joined), with the music mixed under it. Returns filters and the output label.
 
-    The clip's own sound is never processed: the music is added to it. `gain_db`
-    is the final render's single loudness gain on the finished mix (speech and
-    music alike), and `peak_limit` the limiter ceiling that follows it.
+    The clip's own sound is not reshaped: the music is added to it. The one
+    exception is the owner's narration (Story mode): while the owner speaks,
+    the clip's sound is lowered by the `voice.duck` envelope, and raised back
+    after. `gain_db` is the final render's single loudness gain on the finished
+    mix, and `peak_limit` the limiter ceiling that follows it.
     """
     chains: list[str] = []
     if has_audio:
@@ -318,26 +338,44 @@ def _audio_graph(
             chains.append(f"[{src_index}:a]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[s{n}]")
             labels += f"[s{n}]"
         chains.append(f"{labels}concat=n={len(ranges)}:v=0:a=1[a0]")
-    out = None
+    buses: list[str] = []
+    stereo = music is not None or voice is not None
+    if has_audio:
+        if voice is not None and voice_index is not None:
+            chains.append(f"[a0]{_stereo(audio_channels)}[a0s]")
+            chains.append(f"[{voice_index + 1}:a]{_STEREO},atrim=duration={total:.3f},asetpts=PTS-STARTPTS[dk]")
+            chains.append("[a0s][dk]amultiply[ao]")
+            buses.append("ao")
+        elif stereo:
+            chains.append(f"[a0]{_stereo(audio_channels)}[ao]")
+            buses.append("ao")
+        else:
+            buses.append("a0")
     if music is not None:
         chains += _music_chain(music, total, music_index, "md")
-        if has_audio:
-            chains.append(f"[a0]{_stereo(audio_channels)}[ao]")
-            # normalize=0: the clip's own sound stays exactly as loud as it was
-            chains.append("[ao][md]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mx]")
-            chains.append("[mx]alimiter=limit=0.95:level=0[mix]")
-        else:
-            chains.append("[md]alimiter=limit=0.95:level=0[mix]")
+        buses.append("md")
+    if voice is not None and voice_index is not None:
+        chains.append(f"[{voice_index}:a]{_STEREO},atrim=duration={total:.3f},asetpts=PTS-STARTPTS[vo]")
+        buses.append("vo")
+    out = None
+    if len(buses) > 1:
+        # normalize=0: every part keeps exactly the level it was given
+        chains.append("".join(f"[{b}]" for b in buses)
+                      + f"amix=inputs={len(buses)}:duration=first:dropout_transition=0:normalize=0[mx]")
+        chains.append("[mx]alimiter=limit=0.95:level=0[mix]")
         out = "mix"
-    elif has_audio:
-        out = "a0"
+    elif buses:
+        out = buses[0] if (has_audio or not stereo) else None
+        if out is None or out in ("md", "vo"):
+            chains.append(f"[{buses[0]}]alimiter=limit=0.95:level=0[mix]")
+            out = "mix"
     if out is not None and (gain_db is not None or peak_limit is not None):
         level = f"volume={gain_db or 0.0:.2f}dB"
         if peak_limit is not None:
             # limited at four times the sample rate, so peaks that fall between samples are caught too
             level += (f",aresample=192000,alimiter=limit={peak_limit:.4f}:level=0:attack=5:release=60:latency=1,"
                       "aresample=48000")
-        chains.append(f"[{out}]{_stereo(audio_channels if music is None else 2)},{level}[lvl]")
+        chains.append(f"[{out}]{_stereo(2 if stereo else audio_channels)},{level}[lvl]")
         out = "lvl"
     return chains, (f"[{out}]" if out else None)
 
@@ -415,6 +453,7 @@ def render_framed(
     peak_limit: float | None = None,
     check: Callable[[], None] | None = None,
     on_progress: Callable[[float], None] | None = None,
+    voice: VoiceSpec | None = None,
 ) -> Path:
     """A 9:16 render where every frame is built in Python by `draw(frame, clip_time)` and piped to FFmpeg.
 
@@ -442,10 +481,13 @@ def render_framed(
     chains.append(f"[0:v]{look}[v]")
     if has_audio:
         inputs += ["-i", str(src)]
+    music_index = 2 if has_audio else 1
     if music is not None:
         inputs += _music_inputs(music)
-    audio_chains, audio_out = _audio_graph(ranges, has_audio, music, audio_channels, 1, 2 if has_audio else 1,
-                                           total, gain_db, peak_limit)
+    voice_index = music_index + (0 if music is None else (2 if music.envelope is not None else 1))
+    inputs += _voice_inputs(voice)
+    audio_chains, audio_out = _audio_graph(ranges, has_audio, music, audio_channels, 1, music_index,
+                                           total, gain_db, peak_limit, voice, voice_index)
     chains += audio_chains
     cmd = [settings.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *inputs,
            "-filter_complex", ";".join(chains), "-map", "[v]"]
@@ -501,7 +543,7 @@ def render_framed(
 def replace_audio(
     settings: Settings, video_file: Path, src: Path, ranges: list[tuple[float, float]], *, has_audio: bool = True,
     music: MixSpec | None = None, audio_channels: int = 2, gain_db: float | None = None,
-    peak_limit: float | None = None,
+    peak_limit: float | None = None, voice: VoiceSpec | None = None,
 ) -> Path:
     """Mix and encode a rendered file's sound again (new gain or ceiling); the picture is copied untouched."""
     if not settings.ffmpeg:
@@ -509,7 +551,10 @@ def replace_audio(
     ranges = [(float(a), float(b)) for a, b in ranges if b - a > 0.02]
     total = sum(b - a for a, b in ranges)
     inputs = ["-i", str(video_file), "-i", str(src)] + (_music_inputs(music) if music is not None else [])
-    chains, out = _audio_graph(ranges, has_audio, music, audio_channels, 1, 2, total, gain_db, peak_limit)
+    voice_index = 2 + (0 if music is None else (2 if music.envelope is not None else 1))
+    inputs += _voice_inputs(voice)
+    chains, out = _audio_graph(ranges, has_audio, music, audio_channels, 1, 2, total, gain_db, peak_limit,
+                               voice, voice_index)
     if out is None:
         return video_file
     part = video_file.with_name(video_file.stem + ".part" + video_file.suffix)
@@ -522,6 +567,7 @@ def replace_audio(
 def measure_loudness(
     settings: Settings, src: Path, ranges: list[tuple[float, float]], *, has_audio: bool = True,
     music: MixSpec | None = None, audio_channels: int = 2, whole_file: bool = False,
+    voice: VoiceSpec | None = None,
 ) -> dict[str, float] | None:
     """Integrated loudness (LUFS) and true peak (dBTP) of the clip's finished mix, or of a whole file."""
     if not settings.ffmpeg:
@@ -533,12 +579,16 @@ def measure_loudness(
         ranges = [(float(a), float(b)) for a, b in ranges if b - a > 0.02]
         total = sum(b - a for a, b in ranges)
         inputs = ["-i", str(src)] + (_music_inputs(music) if music is not None else [])
-        chains, out = _audio_graph(ranges, has_audio, music, audio_channels, 0, 1, total)
+        voice_index = 1 + (0 if music is None else (2 if music.envelope is not None else 1))
+        inputs += _voice_inputs(voice)
+        chains, out = _audio_graph(ranges, has_audio, music, audio_channels, 0, 1, total, voice=voice,
+                                   voice_index=voice_index)
         if out is None:
             return None
         # measured as it will be heard: stereo, the way the render delivers it (a mono sound
         # copied to both channels reads 3 dB louder than the mono sound itself)
-        chains.append(f"{out}{_stereo(audio_channels if music is None else 2)},loudnorm=print_format=json[m]")
+        stereo = music is not None or voice is not None
+        chains.append(f"{out}{_stereo(2 if stereo else audio_channels)},loudnorm=print_format=json[m]")
         cmd = [settings.ffmpeg, "-hide_banner", "-nostats", *inputs, "-filter_complex", ";".join(chains),
                "-map", "[m]", "-t", f"{total:.3f}", "-f", "null", "-"]
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,

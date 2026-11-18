@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { api, LAYOUT_LABEL, type CaptionStyle, type Clip, type Layout, type Project } from '../api'
 import { CaptionStyleForm } from '../components/CaptionStyleForm'
 import { QualityList, ScoreBadge } from '../components/Quality'
+import { StoryPanel } from '../components/StoryPanel'
 import { CATEGORY_LABEL, duration as clock } from '../format'
 import { Badge, Empty, ErrorNote, JobPanel, PageHeader, Section, Spinner } from '../ui'
 
@@ -393,6 +394,7 @@ function Editor({ project, clips, clipId }: { project: Project; clips: Clip[]; c
         </Section>
 
         <FramingPanel project={project} clip={clip} busy={busy} />
+        <StoryPanel project={project} clip={clip} busy={busy} />
         <FinalPanel project={project} clip={clip} busy={busy} />
         <MusicPanel project={project} clip={clip} busy={busy} />
 

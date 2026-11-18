@@ -167,6 +167,16 @@ function YouTubePanel({ row }: { row: ShortRow }) {
     },
   })
   const check = useMutation({ mutationFn: () => api.refreshShort(p.id, row.id), onSuccess: refresh })
+  const refreshAll = () => {
+    refresh()
+    void qc.invalidateQueries({ queryKey: ['schedule'] })
+  }
+  const [when, setWhen] = useState('')
+  const sched = useMutation({
+    mutationFn: () => api.scheduleShort(p.id, row.id, when ? new Date(when).toISOString() : undefined),
+    onSuccess: refreshAll,
+  })
+  const unsched = useMutation({ mutationFn: () => api.unscheduleShort(p.id, row.id), onSuccess: refreshAll })
   const list = useQuery({
     queryKey: ['checklist', row.id, row.final?.rendered_at, row.meta, row.youtube, row.review, p.rights_status, yt.data?.connected],
     queryFn: () => api.publishChecklist(p.id, row.id),
@@ -181,19 +191,36 @@ function YouTubePanel({ row }: { row: ShortRow }) {
   })
   const failedQc = !!row.final?.qc && !row.final.qc.passed
   const ready = list.data ? (failedQc ? list.data.passed_with_override : list.data.passed) : false
-  const err = upload.error ?? publish.error ?? check.error ?? sendText.error
+  const err = upload.error ?? publish.error ?? check.error ?? sendText.error ?? sched.error ?? unsched.error
+  const goesLive = v?.publish_at ? new Date(v.publish_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : null
+  const canSchedule = !v?.privacy || v.privacy === 'private'
+  const scheduler = canSchedule && ready && yt.data?.connected && p.rights_status !== 'unverified' && (
+    <div className="flex flex-wrap items-center gap-2">
+      <button className="btn h-8 px-3" disabled={sched.isPending} onClick={() => sched.mutate()}>
+        {when ? 'Schedule at this time' : v?.publish_at ? 'Move to next free slot' : 'Schedule for next free slot'}
+      </button>
+      <input aria-label="Publish time" type="datetime-local" className="input h-8 w-auto py-0 text-xs" value={when}
+        onChange={(e) => setWhen(e.target.value)} />
+      {v?.publish_at && (
+        <button className="btn h-8 px-3" disabled={unsched.isPending} onClick={() => unsched.mutate()}>Unschedule</button>
+      )}
+    </div>
+  )
 
   if (!row.final?.exists) return null
   return (
     <div className="rounded-md border border-line px-3 py-3">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium">YouTube</span>
+        {goesLive && <Badge tone="good">Goes public {goesLive}</Badge>}
         {v?.video_id ? (
           <Badge tone={v.privacy === 'public' ? 'good' : v.privacy === 'unlisted' ? 'info' : 'warn'}>
             {v.privacy === 'public' ? 'Public' : v.privacy === 'unlisted' ? 'Unlisted' : 'Private'} on {v.channel ?? 'your channel'}
           </Badge>
         ) : v?.state === 'uploading' ? (
           <Badge tone="info">Upload started</Badge>
+        ) : v?.state === 'scheduled' ? (
+          <Badge tone="info">Scheduled · uploading</Badge>
         ) : (
           <Badge>Not uploaded</Badge>
         )}
@@ -228,6 +255,7 @@ function YouTubePanel({ row }: { row: ShortRow }) {
                 </button>
                 <span className="text-xs text-faint">Nobody can see it until you publish it.</span>
               </div>
+              {scheduler}
             </div>
           )}
         </>
@@ -263,6 +291,8 @@ function YouTubePanel({ row }: { row: ShortRow }) {
             </div>
           )}
           {v.note && <p className="text-xs text-accent">{v.note}</p>}
+          {v.schedule_note && <p className="text-xs text-accent">{v.schedule_note}</p>}
+          {v.privacy === 'private' && scheduler}
           {(v.rejection || v.failure) && <p className="text-xs text-bad">YouTube: {v.rejection ?? v.failure}</p>}
           {row.meta?.pinned_comment && (
             <p className="text-xs text-soft">
@@ -521,6 +551,7 @@ export default function Shorts() {
         title="Generated Shorts"
         subtitle="Approved and rendered Shorts: quality checks, title, description and hashtags, and export."
       />
+      <ScheduleCard />
       {shorts.isPending ? (
         <Spinner />
       ) : shorts.isError ? (
@@ -541,5 +572,88 @@ export default function Shorts() {
         </div>
       )}
     </>
+  )
+}
+
+function ScheduleCard() {
+  const qc = useQueryClient()
+  const status = useQuery({ queryKey: ['schedule'], queryFn: api.schedule, refetchInterval: 60_000 })
+  const [times, setTimes] = useState('')
+  const s = status.data
+  useEffect(() => {
+    if (s) setTimes(s.settings.times.join(', '))
+  }, [s?.settings.times.join(',')])
+  const save = useMutation({
+    mutationFn: (v: Partial<NonNullable<typeof s>['settings']>) => api.putSchedule(v),
+    onSuccess: (d) => qc.setQueryData(['schedule'], d),
+  })
+  if (!s) return status.isError ? <ErrorNote>{status.error.message}</ErrorNote> : null
+  const fmt = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: 'short', dateStyle: 'medium', timeStyle: 'short' })
+  return (
+    <div className="card mb-6 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">Posting schedule</h2>
+        <Badge tone={s.settings.enabled ? 'good' : 'neutral'}>{s.settings.enabled ? 'On' : 'Off'}</Badge>
+      </div>
+      <p className="mt-1 text-xs text-soft">
+        Shorts are uploaded as private with a publish time, and YouTube makes them public at that moment, even when
+        this computer is off. Approving a Short with the schedule on is your OK to publish it at its slot.
+      </p>
+      <div className="mt-4 grid gap-4 sm:grid-cols-3">
+        <div>
+          <label className="label" htmlFor="sched-times">Posting times (24-hour)</label>
+          <input id="sched-times" className="input" value={times} onChange={(e) => setTimes(e.target.value)}
+            placeholder="12:00, 18:00" />
+          <p className="hint">Time zone: {s.settings.timezone}. At most {s.max_per_day} a day.</p>
+        </div>
+        <label className="flex items-start gap-2 pt-6 text-sm">
+          <input type="checkbox" className="mt-0.5 accent-accent" checked={s.settings.enabled}
+            onChange={(e) => save.mutate({ enabled: e.target.checked })} />
+          <span>Schedule is on</span>
+        </label>
+        <label className="flex items-start gap-2 pt-6 text-sm">
+          <input type="checkbox" className="mt-0.5 accent-accent" checked={s.settings.auto}
+            onChange={(e) => save.mutate({ auto: e.target.checked })} />
+          <span>
+            Schedule approved Shorts automatically
+            <span className="hint block">Fills the free slots of the next {s.horizon_hours} hours.</span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2 text-sm sm:col-span-3">
+          <input type="checkbox" className="mt-0.5 accent-accent" checked={s.settings.require_story}
+            onChange={(e) => save.mutate({ require_story: e.target.checked })} />
+          <span>
+            Wait for my narration
+            <span className="hint block">Automatic mode only schedules a Short of someone else's stream once its final
+              render has at least 4 s of your recorded Story lines.</span>
+          </span>
+        </label>
+      </div>
+      <div className="mt-3 flex gap-2">
+        <button className="btn" disabled={save.isPending}
+          onClick={() => save.mutate({ times: times.split(/[,\s]+/).filter(Boolean) })}>Save times</button>
+      </div>
+      {save.error && <div className="mt-3"><ErrorNote>{save.error.message}</ErrorNote></div>}
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <div>
+          <div className="text-xs font-medium text-soft">Coming up</div>
+          {s.upcoming.filter((u) => !u.past).length === 0 ? (
+            <p className="mt-1 text-sm text-faint">Nothing scheduled.</p>
+          ) : (
+            <ul className="mt-1 space-y-1 text-sm">
+              {s.upcoming.filter((u) => !u.past).map((u) => (
+                <li key={u.clip_id}><span className="text-ink">{fmt(u.publish_at)}</span> · {u.title ?? u.project}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div>
+          <div className="text-xs font-medium text-soft">Next free slots</div>
+          <ul className="mt-1 space-y-1 text-sm text-faint">
+            {s.next_slots.map((n) => <li key={n}>{fmt(n)}</li>)}
+          </ul>
+        </div>
+      </div>
+    </div>
   )
 }

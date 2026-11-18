@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 
@@ -22,7 +23,9 @@ from ..music import (
     MIN_GAP_DB,
     MOOD_LABEL,
     MOODS,
+    YT_AUDIO_LIBRARY,
     analyse_track,
+    estimate_moods,
     licence_warnings,
     requires_attribution,
 )
@@ -132,6 +135,63 @@ def import_track(body: TrackImport, ctx: AppContext = Depends(get_ctx)) -> dict:
         track.channels = analysis["channels"]
         s.commit()
         return track_to_dict(track)
+
+
+class FolderImport(BaseModel):
+    folder: str = Field(min_length=1, max_length=1000)
+    attribution: str | None = Field(default=None, max_length=500)  # only for tracks marked "attribution required"
+
+
+@router.post("/import-folder", status_code=201)
+def import_folder(body: FolderImport, ctx: AppContext = Depends(get_ctx)) -> dict:
+    """Add every audio file in a folder of tracks downloaded from the YouTube Audio Library.
+
+    Each is analysed, given a first guess at its moods (tempo, beat strength, level; the owner can correct
+    it) and recorded with the Audio Library licence. Files already in the library are skipped. Tracks the
+    Audio Library marks "attribution required" need their credit line: import those separately, or add it.
+    """
+    folder = Path(body.folder.strip().strip('"')).expanduser()
+    if not folder.is_dir():
+        raise HTTPException(422, f"Folder not found: {folder}")
+    files = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS)[:200]
+    if not files:
+        raise HTTPException(422, "No audio files in that folder (" + ", ".join(sorted(AUDIO_EXTENSIONS)) + ").")
+    added, skipped = [], []
+    ctx.settings.music_dir.mkdir(parents=True, exist_ok=True)
+    with ctx.session() as s:
+        have = {t.original_name for t in s.scalars(select(Track)).all()}
+    for path in files:
+        if path.name in have:
+            skipped.append({"file": path.name, "reason": "already in the library"})
+            continue
+        if path.stat().st_size > MAX_TRACK_BYTES:
+            skipped.append({"file": path.name, "reason": "larger than 200 MB"})
+            continue
+        with ctx.session() as s:
+            track = Track(title=path.stem[:200], file="", original_name=path.name, moods=[],
+                          source=YT_AUDIO_LIBRARY["source"], licence_name=YT_AUDIO_LIBRARY["licence_name"],
+                          licence_url=YT_AUDIO_LIBRARY["licence_url"],
+                          licence_note="Free to use in videos on YouTube, including monetised ones.",
+                          attribution=_clean(body.attribution))
+            s.add(track)
+            s.flush()
+            dest = ctx.settings.music_dir / f"{track.id}{path.suffix.lower()}"
+            try:
+                shutil.copyfile(path, dest)
+                analysis = analyse_track(ctx.settings, dest)
+            except (MediaError, OSError) as exc:
+                s.rollback()
+                dest.unlink(missing_ok=True)
+                skipped.append({"file": path.name, "reason": f"could not be read ({exc})"})
+                continue
+            track.file = str(dest)
+            track.duration, track.loudness_db = analysis["duration"], analysis["loudness_db"]
+            track.bpm, track.beats, track.phase = analysis["bpm"], analysis["beats"], analysis["phase"]
+            track.regularity, track.channels = analysis["regularity"], analysis["channels"]
+            track.moods = estimate_moods(analysis, path.stem)
+            s.commit()
+            added.append(track_to_dict(track))
+    return {"added": added, "skipped": skipped}
 
 
 @router.patch("/{track_id}")

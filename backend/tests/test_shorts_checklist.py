@@ -23,7 +23,8 @@ def video_file(tmp_path) -> Path:
 def make_clip(video_file: Path, **over):
     final = {"file": str(video_file), "name": "final.mp4", "width": 1080, "height": 1920, "duration": 45.0,
              "video_codec": "h264", "audio_codec": "aac", "loudness": {"lufs": -14.0, "true_peak": -1.5},
-             "qc": {"passed": True, "score": 100, "checks": []}}
+             "qc": {"passed": True, "score": 100, "checks": []},
+             "story": {"seconds": 9.0, "lines": 3}}  # the owner's narration (Story mode)
     final.update(over.pop("final", {}))
     meta = {"title": "A good title", "description": "Credit: Someone on YouTube\nOriginal video: x\n\nText.\n\n#a #Shorts",
             "hashtags": ["#a", "#Shorts"]}
@@ -201,3 +202,12 @@ def test_text_cannot_be_sent_before_upload(client, sample_video):  # noqa: F811
     project, clip = finished_project(client, sample_video)
     r = client.post(f"/api/projects/{project['id']}/clips/{clip['id']}/youtube-text")
     assert r.status_code == 409 and "goes with the upload" in r.json()["error"]
+
+
+def test_someone_elses_footage_without_narration_gets_a_reused_content_warning(video_file):
+    _r, items = check(make_clip(video_file, final={"story": None}))
+    assert items["original"]["status"] == "warn" and "reused-content" in items["original"]["detail"]
+    _r, items = check(make_clip(video_file, final={"story": None}), rights="own")
+    assert "original" not in items, "the owner's own footage needs no commentary"
+    _r, items = check(make_clip(video_file))
+    assert items["original"]["status"] == "ok"

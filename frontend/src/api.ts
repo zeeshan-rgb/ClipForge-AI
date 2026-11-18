@@ -176,6 +176,7 @@ export interface ProjectOptions {
   max_parts: number
   context: ContextLevel
   trim_silence: boolean
+  hook: 'auto' | 'story' | 'cold_open'
   caption_style: CaptionStyle
   music_mode: MusicMode
   music_gap_db: number
@@ -283,10 +284,56 @@ export interface ClipYouTube {
   title?: string
   uploaded_at?: string
   published_at?: string | null
-  state?: 'uploading' | 'uploaded' | 'removed'
+  state?: 'uploading' | 'uploaded' | 'removed' | 'scheduled' | null
   note?: string | null
+  publish_at?: string | null
+  planned_publish_at?: string | null
+  schedule_note?: string | null
+  scheduled_by?: 'auto' | 'owner' | null
   rejection?: string | null
   failure?: string | null
+}
+
+export interface StoryLine {
+  id: string
+  role: 'hook' | 'context' | 'reaction' | 'outro'
+  text: string
+  audio: string | null
+  seconds: number | null
+  at: number | null
+  auto_at?: boolean
+}
+
+export interface Story {
+  lines: StoryLine[]
+  cards: { id: string; text: string; at: number; seconds: number }[]
+  stickers: { id: string; sticker: string; at: number; seconds: number }[]
+  drafted_at: string | null
+  updated_at?: string
+  contribution: { seconds: number; share: number; lines: number; cards: number; stickers: number }
+  in_final: { seconds: number; lines: number } | null
+  render_needed: boolean
+  stickers_available: Record<string, { text: string; moods: string[] }>
+}
+
+export interface ScheduleStatus {
+  settings: { enabled: boolean; auto: boolean; times: string[]; timezone: string; require_story: boolean }
+  upcoming: {
+    clip_id: number
+    project_id: number
+    project: string
+    title: string | null
+    publish_at: string
+    past: boolean
+    video_id: string | null
+    url: string | null
+    state: string | null
+    note: string | null
+  }[]
+  next_slots: string[]
+  connected: boolean
+  horizon_hours: number
+  max_per_day: number
 }
 
 export interface PublishChecklist {
@@ -545,6 +592,72 @@ export interface NewProject {
   rights_status: RightsStatus
   rights_note?: string
   options: ProjectOptions
+  permission_id?: number
+}
+
+export type StreamerStatus =
+  | 'looking_up' | 'no_contact' | 'queued' | 'sent' | 'followed_up' | 'replied'
+  | 'approved' | 'declined' | 'no_reply' | 'bounced' | 'failed' | 'paused'
+
+export interface Streamer {
+  id: number
+  url: string
+  platform: 'youtube' | 'twitch' | 'kick'
+  handle: string | null
+  name: string | null
+  followers: number | null
+  channel_url: string | null
+  links: { url: string; found: string }[]
+  emails: { email: string; found: string }[]
+  contact_email: string | null
+  status: StreamerStatus
+  status_detail: string | null
+  subject: string | null
+  body: string | null
+  sent_at: string | null
+  followup_at: string | null
+  reply: { from: string; date: string; snippet: string; text: string } | null
+  evidence: string | null
+  conditions: string | null
+  decided_at: string | null
+  created_at: string
+}
+
+export interface OutreachSettings {
+  auto_send: boolean
+  daily_limit: number
+  spacing_minutes: number
+  followup_days: number
+  close_days: number
+  sender_name: string
+  channel_name: string
+  channel_url: string
+  subject: string
+  body: string
+  followup_body: string
+}
+
+export interface OutreachStatus {
+  client: boolean
+  connected: boolean
+  address: string | null
+  settings: OutreachSettings
+  channel_name: string
+  channel_url: string
+  missing: string | null
+  sent_last_day: number
+  last_error: string | null
+  last_tick: string | null
+  counts: Partial<Record<StreamerStatus, number>>
+}
+
+export interface ApprovedStreamer {
+  id: number
+  name: string
+  platform: string
+  channel_url: string | null
+  conditions: string | null
+  note: string
 }
 
 export class ApiError extends Error {
@@ -643,6 +756,31 @@ export const api = {
     post<Project>(`/api/projects/${projectId}/upload`, { clip_ids: clipIds, override }),
   publishShort: (projectId: number, clipId: number, privacy: 'public' | 'unlisted' | 'private', title: string) =>
     post<Clip>(`/api/projects/${projectId}/clips/${clipId}/publish`, { privacy, title, confirm: true }),
+  schedule: () => request<ScheduleStatus>('/api/schedule'),
+  story: (projectId: number, clipId: number) => request<Story>(`/api/projects/${projectId}/clips/${clipId}/story`),
+  draftStory: (projectId: number, clipId: number) => post<Story>(`/api/projects/${projectId}/clips/${clipId}/story/draft`),
+  saveStory: (projectId: number, clipId: number, s: unknown) =>
+    request<Story>(`/api/projects/${projectId}/clips/${clipId}/story`, { method: 'PUT', body: JSON.stringify(s) }),
+  uploadStoryTake: async (projectId: number, clipId: number, lineId: string, blob: Blob): Promise<Story> => {
+    const form = new FormData()
+    form.append('file', blob, blob.type.includes('mp4') ? 'take.m4a' : 'take.webm')
+    const res = await fetch(`/api/projects/${projectId}/clips/${clipId}/story/lines/${lineId}/audio`, { method: 'POST', body: form })
+    const body = (await res.json().catch(() => null)) as { error?: string } | null
+    if (!res.ok) throw new ApiError(body?.error ?? `Request failed (${res.status})`, res.status)
+    return body as unknown as Story
+  },
+  deleteStoryTake: (projectId: number, clipId: number, lineId: string) =>
+    request<Story>(`/api/projects/${projectId}/clips/${clipId}/story/lines/${lineId}/audio`, { method: 'DELETE' }),
+  storyTakeUrl: (projectId: number, clipId: number, lineId: string, v: number | null) =>
+    `/api/projects/${projectId}/clips/${clipId}/story/lines/${lineId}/audio?v=${v ?? 0}`,
+  importMusicFolder: (folder: string) =>
+    post<{ added: Track[]; skipped: { file: string; reason: string }[] }>('/api/music/import-folder', { folder }),
+  putSchedule: (s: Partial<ScheduleStatus['settings']>) =>
+    request<ScheduleStatus>('/api/schedule', { method: 'PUT', body: JSON.stringify(s) }),
+  scheduleShort: (projectId: number, clipId: number, at?: string) =>
+    post<Clip>(`/api/projects/${projectId}/clips/${clipId}/schedule`, { confirm: true, at: at ?? null }),
+  unscheduleShort: (projectId: number, clipId: number) =>
+    request<Clip>(`/api/projects/${projectId}/clips/${clipId}/schedule`, { method: 'DELETE' }),
   publishChecklist: (projectId: number, clipId: number) =>
     request<PublishChecklist>(`/api/projects/${projectId}/clips/${clipId}/publish-checklist`),
   sendTextToYouTube: (projectId: number, clipId: number) =>
@@ -673,4 +811,25 @@ export const api = {
   selfTest: (stageSeconds: number) => post<Job>('/api/jobs/selftest', { stage_seconds: stageSeconds }),
   cancelJob: (id: number) => post<Job>(`/api/jobs/${id}/cancel`),
   retryJob: (id: number) => post<Job>(`/api/jobs/${id}/retry`),
+  outreach: () => request<OutreachStatus>('/api/outreach'),
+  outreachSettings: (s: Partial<OutreachSettings>) =>
+    request<OutreachStatus>('/api/outreach/settings', { method: 'PUT', body: JSON.stringify(s) }),
+  outreachPreview: (s: Partial<OutreachSettings>) =>
+    post<{ subject: string; body: string; followup: string }>('/api/outreach/preview', s),
+  gmailConnect: () => post<{ url: string }>('/api/gmail/connect'),
+  gmailDisconnect: () => post<OutreachStatus>('/api/gmail/disconnect'),
+  streamers: () => request<Streamer[]>('/api/streamers'),
+  approvedStreamers: () => request<ApprovedStreamer[]>('/api/streamers/approved'),
+  addStreamer: (url: string, email?: string) => post<Streamer>('/api/streamers', { url, email: email || null }),
+  addStreamers: (text: string) =>
+    post<{ added: Streamer[]; skipped: { line: string; reason: string }[] }>('/api/streamers/bulk', { text }),
+  editStreamer: (id: number, s: { contact_email?: string; subject?: string; body?: string }) =>
+    request<Streamer>(`/api/streamers/${id}`, { method: 'PATCH', body: JSON.stringify(s) }),
+  sendStreamer: (id: number) => post<Streamer>(`/api/streamers/${id}/send`),
+  checkStreamer: (id: number) => post<Streamer>(`/api/streamers/${id}/check`),
+  lookupStreamer: (id: number) => post<Streamer>(`/api/streamers/${id}/lookup`),
+  approveStreamer: (id: number, evidence: string, conditions: string) =>
+    post<Streamer>(`/api/streamers/${id}/approve`, { evidence, conditions }),
+  declineStreamer: (id: number) => post<Streamer>(`/api/streamers/${id}/decline`, {}),
+  deleteStreamer: (id: number) => request<void>(`/api/streamers/${id}`, { method: 'DELETE' }),
 }

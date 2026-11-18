@@ -197,6 +197,64 @@ FFmpeg. After cloning:
    licence). Without it the app still works but keeps the centre of the
    picture instead of following faces.
 
+## Story mode (your narration)
+
+In the Clip editor, **Story mode** suggests 3–4 short lines for the Short (a hook,
+context, your reaction, an outro), story cards and reaction stickers. Edit the
+lines into your own words and record each one with your microphone right there.
+The stream's sound dips while you speak and your words appear in a narrator box.
+Then render the final Short. Shorts of someone else's stream are only scheduled
+automatically once they carry at least 4 s of your narration. Stickers are drawn
+by ClipForge as text; music can come from a YouTube Audio Library folder
+(Settings → Music library → "Add a folder"), with moods guessed per track.
+
+## Posting schedule and hooks
+
+- **Schedule** (Generated Shorts page): Shorts are uploaded as private with a
+  publish time and YouTube makes them public then, even with this computer off.
+  Set daily times in your time zone; "Schedule approved Shorts automatically"
+  fills the next 48 hours of slots. Current setting: 07:30 and 21:30 IST:
+  07:30 is 9 pm ET / 6 pm PT the evening before and 1 pm in Sydney; 21:30 is
+  4 pm in the UK and Indian prime time. YouTube says time of day is not
+  something its Shorts feed optimises for, so after about a month use
+  YouTube Studio → Analytics → Audience → "When your viewers are on YouTube".
+- **Opening hook** (project option): Automatic opens a clip with a 1–3.5 s
+  flash-forward of the payoff when it comes late, then plays the story in
+  order. The quality report now also checks the opening, dead air and the ending.
+- **Monetisation:** YouTube's reused-content policy applies to the whole
+  channel, and a streamer's permission does not exempt clips "with little or no
+  narrative". Add original commentary or editing.
+
+## Permissions page (asking streamers)
+
+Paste a streamer's YouTube, Twitch or Kick channel link. ClipForge reads their
+public profile and any link-in-bio page for a contact address, writes a
+personal request from your template, and sends it from your Gmail: by default
+at most 5 a day, 20 minutes apart, with one follow-up after 7 days and the
+request closed as "no reply" a fortnight later. Replies are noticed
+automatically and kept in `data/permissions`. Silence is never permission;
+only your "They said yes" click is, and then new projects from that streamer
+get "creator permission" with the record, after a check that each video really
+is theirs. A "no" withdraws it and that address is never written to again.
+
+Gmail uses the same Google Cloud client as YouTube: enable the Gmail API in
+that project, then Connect Gmail on the Permissions page. Twitch profile text
+needs `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` in `.env`. YouTube hides
+many business emails behind a CAPTCHA ("View email address"), which ClipForge
+does not get past: paste those in by hand.
+
+## Set up on macOS
+
+1. `brew install python@3.12 python-tk@3.12 ffmpeg-full` (the plain `ffmpeg`
+   formula has no libass, so captions fail)
+2. `/opt/homebrew/bin/python3.12 -m venv backend/.venv`
+3. `backend/.venv/bin/python -m pip install -r backend/requirements.lock.txt`
+4. `backend/.venv/bin/python -m pip install -e backend`
+5. In `frontend`: `npm install`, then `npm run build`
+6. `mkdir -p tools/ffmpeg && ln -sf /opt/homebrew/opt/ffmpeg-full/bin/ffmpeg /opt/homebrew/opt/ffmpeg-full/bin/ffprobe tools/ffmpeg/`
+7. Fonts and face model as in steps 6–7 above; `cp .env.example .env`
+8. Run `./clipforge.sh`
+
 ## Layout
 
 | Path | What |

@@ -35,6 +35,13 @@ export default function NewProject() {
   const [title, setTitle] = useState('')
   const [rights, setRights] = useState<RightsValue>({ status: 'unverified', creator: '', note: '' })
   const [options, setOptions] = useState<ProjectOptions | null>(null)
+  const [permissionId, setPermissionId] = useState<number | null>(null)
+  const approved = useQuery({ queryKey: ['approved-streamers'], queryFn: api.approvedStreamers })
+  const choosePermission = (id: string) => {
+    const st = approved.data?.find((a) => String(a.id) === id)
+    setPermissionId(st ? st.id : null)
+    setRights(st ? { status: 'creator_permission', creator: st.name, note: st.note } : { status: 'unverified', creator: '', note: '' })
+  }
 
   useEffect(() => {
     if (defaults.data && options === null) setOptions(defaults.data)
@@ -88,6 +95,7 @@ export default function NewProject() {
       rights_status: rights.status,
       rights_note: rights.status === 'own' ? undefined : rights.note.trim() || undefined,
       options,
+      permission_id: permissionId ?? undefined,
     })
   }
 
@@ -175,7 +183,24 @@ export default function NewProject() {
         </Section>
 
         <Section title="Whose footage is this?">
-          <RightsFields value={rights} onChange={setRights} />
+          {approved.data && approved.data.length > 0 && (
+            <div className="mb-5">
+              <label className="label" htmlFor="permission">Permission recorded on the Permissions page</label>
+              <select id="permission" className="input" value={permissionId ?? ''} onChange={(e) => choosePermission(e.target.value)}>
+                <option value="">None: fill in the rights below</option>
+                {approved.data.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} ({a.platform}){a.conditions ? ` · ${a.conditions}` : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="hint">
+                ClipForge checks that the video really is from this streamer before downloading it. A link with their
+                channel name in it is matched automatically.
+              </p>
+            </div>
+          )}
+          <RightsFields value={rights} onChange={(r) => { setRights(r); setPermissionId(null) }} />
           {source === 'url' && blocker && (
             <div className="mt-4 rounded-lg border border-accent/30 bg-accent/10 px-3.5 py-2.5 text-sm text-accent">
               This link will be saved but not downloaded. {blocker} You can also add the video as a file later.

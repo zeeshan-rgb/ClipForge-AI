@@ -21,6 +21,7 @@ from typing import Any
 PRESETS = [15, 20, 30, 35, 45, 60, 90]
 MODES = ("strict", "smart", "flexible")
 CONTEXT_LEVELS = ("tight", "balanced", "full")
+HOOK_MODES = ("auto", "story", "cold_open")
 
 MIN_TARGET, MAX_TARGET = 10, 180
 FLEX_FACTOR = 1.6  # how far Flexible may run past the target
@@ -37,6 +38,14 @@ TAG_ON_GAP = 1.0
 EXTRA_LINE_COST = 3.0  # score cost of each line taken beyond the moment's own last line
 MIN_VALID_ENDING = 40
 MIN_KEPT_SHARE = 0.5  # a single clip must keep at least this much of the moment it was cut from
+# Hook: a Short is judged in its first seconds. When the payoff comes late, the
+# clip may open with a short flash-forward of it, then play the story in order.
+HOOK_LATE = 6.0  # Auto: a payoff this far into the clip gets a teaser up front
+TEASER_MIN, TEASER_MAX = 1.0, 3.5  # a teaser is a whole-word span of this length
+TEASER_PAD_IN, TEASER_PAD_OUT = 0.08, 0.2
+# Finishing beat: a laugh or loud reaction right after the last word is kept.
+BEAT_START_WITHIN = 0.8  # a loud moment starting this soon after the last word...
+BEAT_KEEP = 1.2  # ...is kept for this long, never into the next words
 
 _TERMINAL = (".", "?", "!", "…")
 _CLOSERS = "\"'”’)]"
@@ -71,6 +80,7 @@ class DurationSettings:
     max_parts: int = 3
     context: str = "balanced"
     trim_silence: bool = True
+    hook: str = "story"  # story | auto | cold_open (projects default to auto, see schemas.ProjectOptions)
 
     @property
     def low(self) -> float:
@@ -632,22 +642,141 @@ def plan_parts(
     return plans
 
 
+def _clip_time(t: float, segments: list[tuple[float, float]]) -> float | None:
+    acc = 0.0
+    for a, b in segments:
+        if a <= t <= b:
+            return acc + t - a
+        acc += b - a
+    return None
+
+
+def finishing_beat(plan: ClipPlan, ctx: Context) -> ClipPlan:
+    """Keep a laugh or loud reaction that starts right after the last word, instead of cutting it off."""
+    if not plan.valid or not plan.segments:
+        return plan
+    end = plan.segments[-1][1]
+    last = max((w for w in ctx.words if w.e <= end + 0.01), key=lambda w: w.e, default=None)
+    if last is None:
+        return plan
+    event = next((e for e in sorted(ctx.events) if last.e - 0.1 <= e <= last.e + BEAT_START_WITHIN), None)
+    if event is None:
+        return plan
+    nxt = min((w.s for w in ctx.words if w.s >= last.e + 0.05), default=None)
+    new_end = max(end, event + BEAT_KEEP)
+    if nxt is not None:
+        new_end = min(new_end, nxt - 0.1)
+    if ctx.duration:
+        new_end = min(new_end, ctx.duration)
+    new_end = round(new_end, 2)
+    if new_end <= end + 0.1:
+        return plan
+    a, _ = plan.segments[-1]
+    plan.segments = [*plan.segments[:-1], (a, new_end)]
+    plan.duration = round(plan.duration + new_end - end, 2)
+    plan.end = new_end
+    plan.report["reasons"] = [*plan.report.get("reasons", []),
+                              f"Keeps the {new_end - end:.1f} s reaction after the last line instead of cutting it off."]
+    plan.report["actual_seconds"] = plan.duration
+    plan.report["finishing_beat"] = round(new_end - end, 2)
+    return plan
+
+
+def _teaser(ctx: Context, sentences: list[Sentence], peak: float) -> tuple[float, float, str] | None:
+    """A whole-word span of the payoff, 1 to 3.5 s, for a flash-forward opening."""
+    words = ctx.words
+    if not words:
+        return None
+    holder = next((s for s in sentences if s.start - 0.3 <= peak <= s.end + 0.3), None)
+    if holder is None:
+        holder = min(sentences, key=lambda s: abs(s.start - peak), default=None)
+    if holder is None:
+        return None
+    # the word said at the peak (or the first one after it), within the payoff sentence
+    centre = min(range(holder.i0, holder.i1 + 1), key=lambda i: abs((words[i].s + words[i].e) / 2 - peak))
+    best: tuple[float, int, int] | None = None
+    for i in range(holder.i0, centre + 1):
+        for j in range(centre, holder.i1 + 1):
+            length = words[j].e - words[i].s
+            if length > TEASER_MAX:
+                break
+            if length < TEASER_MIN:
+                continue
+            # prefer the whole sentence, then spans that end where the sentence ends, then longer
+            score = length + (2.0 if (i == holder.i0 and j == holder.i1) else 0) + (1.0 if j == holder.i1 else 0)
+            if best is None or score > best[0]:
+                best = (score, i, j)
+    if best is None:
+        return None
+    _, i, j = best
+    prev_e = words[i - 1].e if i > 0 else 0.0
+    next_s = words[j + 1].s if j + 1 < len(words) else words[j].e + TEASER_PAD_OUT
+    start = max(prev_e + 0.02, words[i].s - TEASER_PAD_IN, 0.0)
+    end = min(next_s - 0.02, words[j].e + TEASER_PAD_OUT)
+    if ctx.duration:
+        end = min(end, ctx.duration)
+    text = " ".join(w.t for w in words[i:j + 1])
+    return round(start, 2), round(end, 2), text
+
+
+def cold_open(plan: ClipPlan, ctx: Context, sentences: list[Sentence], peak: float, st: DurationSettings) -> ClipPlan:
+    """Open with a short flash-forward of the payoff when the clip takes too long to get there.
+
+    The story then plays from its start, in order, so nothing that needs its
+    setup is said without it. Only for a single, complete clip.
+    """
+    def note(strategy: str, why: str, **extra: Any) -> ClipPlan:
+        plan.report["hook"] = {"strategy": strategy, "reason": why, **extra}
+        return plan
+
+    if st.hook == "story":
+        return note("story", "Plays in story order (your choice).")
+    if not plan.valid or plan.parts > 1 or not plan.segments:
+        return note("story", "Connected parts and incomplete clips keep story order.")
+    at = _clip_time(peak, plan.segments)
+    if at is None:
+        return note("story", "The key moment is not inside this clip.")
+    if st.hook == "auto" and at < HOOK_LATE:
+        return note("story", f"The key moment comes {at:.1f} s in, early enough to be the hook.")
+    teaser = _teaser(ctx, sentences, peak)
+    if teaser is None:
+        return note("story", "No short, whole-word line at the key moment could be used as a teaser.")
+    a, b, text = teaser
+    length = b - a
+    if _clip_time((a + b) / 2, plan.segments) is not None and _clip_time((a + b) / 2, plan.segments) < 1.5:
+        return note("story", "The key line already opens the clip.")
+    if plan.duration + length > st.high + 0.05 and st.mode == "strict":
+        return note("story", f"A {length:.1f} s teaser would take the clip over the {st.target:.0f} s limit.")
+    plan.segments = [(a, b), *plan.segments]
+    plan.duration = round(plan.duration + length, 2)
+    plan.report["actual_seconds"] = plan.duration
+    plan.report["reasons"] = [*plan.report.get("reasons", []),
+                              f"Opens with a {length:.1f} s flash-forward of the payoff (“{text}”), "
+                              "then tells the story from its start."]
+    return note("cold_open", f"The key moment comes {at:.1f} s in, so a {length:.1f} s teaser of it opens the clip.",
+                seconds=round(length, 2), text=text, payoff_at=round(at + length, 2))
+
+
 def plan_moment(ctx: Context, core_start: float, core_end: float, peak: float, st: DurationSettings) -> list[ClipPlan]:
     """Everything to cut for one moment: one clip, several connected parts, or one invalid plan saying why not."""
     sentences = build_sentences(ctx.words)
     single = plan_clip(ctx, sentences, core_start, core_end, peak, st)
+
+    def finish(plan: ClipPlan) -> list[ClipPlan]:
+        return [cold_open(finishing_beat(plan, ctx), ctx, sentences, peak, st)]
+
     if not st.split:
-        return [single]
+        return finish(single)
     # With splitting on, a moment that only fits in one clip by losing some of
     # its setup is told in parts instead, so nothing is left out.
     whole = single.valid and not single.report.get("setup_sentences_dropped")
     if whole:
-        return [single]
+        return finish(single)
     parts = plan_parts(ctx, sentences, core_start, core_end, peak, st)
     if parts:
         return parts
     if single.valid:
-        return [single]
+        return finish(single)
     single.report["no_fit"] = (
         single.report.get("no_fit", "This moment does not fit.")
         + f" It also could not be split into {st.max_parts} or fewer parts at finished sentences."

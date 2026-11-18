@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import Request
 from sqlalchemy import Engine
@@ -20,6 +21,7 @@ class AppContext:
     session: sessionmaker[Session]
     bus: EventBus
     worker: JobWorker
+    outreach: Any = None  # the background permission-request sender
 
 
 def get_ctx(request: Request) -> AppContext:

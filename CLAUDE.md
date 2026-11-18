@@ -110,7 +110,9 @@ Run from the repository root (`D:\ClipForge-AI`).
   (automatic or by hand) and when rendering. Never add a path around it, and
   never put music files in git. Test tracks must be original or properly
   licensed, and are kept outside the repository.
-- **The clip's own sound is never processed.** Music is added to it and
+- **The clip's own sound is never processed**, except one owner-approved case
+  (2026-11-18): under the owner's own Story-mode narration it is lowered by a
+  gain envelope (`story.DUCK_TO`, about −10 dB) with short ramps. Music is added to it and
   lowered under speech; mono sounds are copied to both channels at unity
   (FFmpeg's default mono-to-stereo conversion cuts 3 dB per channel).
 - **Loudness levelling is one gain on the finished mix** (then a peak-only

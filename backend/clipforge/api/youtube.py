@@ -10,6 +10,7 @@ import html
 import secrets
 import threading
 import time
+from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -20,6 +21,7 @@ from sqlalchemy import func, select
 
 import httpx
 
+from .. import schedule
 from .. import youtube as yt
 from ..context import AppContext, get_ctx
 from ..rights import PUBLISHABLE
@@ -345,4 +347,147 @@ def refresh(project_id: int, clip_id: int, ctx: AppContext = Depends(get_ctx)) -
                             "checked_at": iso(utcnow())}
         s.commit()
         data = clip_to_dict(clip)
+    return data
+
+
+# ---- posting schedule ---------------------------------------------------------------------------------
+
+
+class ScheduleSettings(BaseModel):
+    enabled: bool | None = None
+    auto: bool | None = None
+    require_story: bool | None = None
+    times: list[str] | None = None
+    timezone: str | None = None
+
+
+class ScheduleRequest(BaseModel):
+    confirm: bool = False  # the owner's yes: publish this Short at this time
+    at: str | None = None  # a chosen time (ISO); default: the next free slot
+
+
+def _schedule_status(ctx: AppContext) -> dict:
+    now = utcnow()
+    with ctx.session() as s:
+        cfg = schedule.load(s)
+        nxt = [iso(at) for at, _ in zip(
+            (a for a in schedule.slots(cfg, now) if a not in schedule.taken_slots(s)), range(5))]
+        return {"settings": cfg, "upcoming": schedule.upcoming(s, now), "next_slots": nxt,
+                "connected": bool((yt.load_token(ctx.settings) or {}).get("refresh_token")),
+                "horizon_hours": schedule.HORIZON_HOURS, "max_per_day": schedule.MAX_PER_DAY}
+
+
+@router.get("/schedule")
+def get_schedule(ctx: AppContext = Depends(get_ctx)) -> dict:
+    return _schedule_status(ctx)
+
+
+@router.put("/schedule")
+def put_schedule(body: ScheduleSettings, ctx: AppContext = Depends(get_ctx)) -> dict:
+    with ctx.session() as s:
+        try:
+            schedule.save(s, body.model_dump(exclude_none=True))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    if getattr(ctx, "outreach", None) is not None:
+        ctx.outreach.wake()
+    return _schedule_status(ctx)
+
+
+@router.post("/projects/{project_id}/clips/{clip_id}/schedule")
+def schedule_clip(project_id: int, clip_id: int, body: ScheduleRequest, ctx: AppContext = Depends(get_ctx)) -> dict:
+    """Publish this Short at a set time: uploaded as private with that publish time, made public by YouTube."""
+    if not body.confirm:
+        raise HTTPException(409, "Scheduling needs your explicit confirmation for this Short.")
+    if not (yt.load_token(ctx.settings) or {}).get("refresh_token"):
+        raise HTTPException(409, "No YouTube channel is connected. Connect one in Settings.")
+    now = utcnow()
+    with ctx.session() as s:
+        project = s.get(Project, project_id)
+        clip = s.get(Clip, clip_id)
+        if project is None or clip is None or clip.project_id != project_id:
+            raise HTTPException(404, "Clip not found")
+        why = schedule.blocker(s, project, clip)
+        if why:
+            raise HTTPException(409, f"Not scheduled. {why}")
+        video = dict(clip.youtube or {})
+        if video.get("privacy") and video["privacy"] != "private":
+            raise HTTPException(409, "This Short is already public or unlisted.")
+        cfg = schedule.load(s)
+        if body.at:
+            try:
+                at = schedule._parse(body.at)
+            except ValueError as exc:
+                raise HTTPException(422, "That is not a date and time.") from exc
+            if at < now + timedelta(minutes=schedule.LEAD_MINUTES):
+                raise HTTPException(422, f"Choose a time at least {schedule.LEAD_MINUTES} minutes from now.")
+        else:
+            at = schedule.next_free(s, cfg, now)
+            if at is None:
+                raise HTTPException(409, "No free slot in the next 30 days. Add posting times.")
+        uploaded = bool(video.get("video_id"))
+        if not uploaded and schedule.project_busy(s, project_id):
+            raise HTTPException(409, "This project is still processing. Wait for it to finish first.")
+        video_id = video.get("video_id")
+    if uploaded:
+        http = yt.make_http()
+        try:
+            st = yt.set_publish_at(ctx.settings, http, video_id, schedule.to_api(at))
+        except yt.YouTubeError as exc:
+            raise HTTPException(409 if isinstance(exc, yt.Refused) else 502, str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"YouTube could not be reached ({exc}).") from exc
+        finally:
+            http.close()
+        kept = bool(st.get("publishAt"))
+        note = None if kept else ("YouTube did not keep the publish time, so this Short stays private (an API "
+                                  "project YouTube has not audited). Publish it in YouTube Studio.")
+    with ctx.session() as s:
+        clip = s.get(Clip, clip_id)
+        new = {**(clip.youtube or {}), "planned_publish_at": iso(at), "scheduled_by": "owner", "unscheduled": None}
+        if uploaded:
+            new.update(publish_at=iso(at) if kept else None, schedule_note=note)
+        else:
+            new.update(publish_at=iso(at), state="scheduled", schedule_note=None)
+        clip.youtube = new
+        if not uploaded:
+            project = s.get(Project, project_id)
+            project.status, project.status_detail = "processing", None
+        s.commit()
+        data = clip_to_dict(clip)
+    if not uploaded:
+        ctx.worker.enqueue("upload", project_id=project_id, params={"clip_ids": [clip_id], "override": False})
+    ctx.bus.publish({"type": "project", "id": project_id})
+    return data
+
+
+@router.delete("/projects/{project_id}/clips/{clip_id}/schedule")
+def unschedule_clip(project_id: int, clip_id: int, ctx: AppContext = Depends(get_ctx)) -> dict:
+    """Take the publish time away: the Short stays (or will be uploaded) private. Automatic mode leaves it alone."""
+    with ctx.session() as s:
+        clip = s.get(Clip, clip_id)
+        if clip is None or clip.project_id != project_id:
+            raise HTTPException(404, "Clip not found")
+        video = dict(clip.youtube or {})
+        video_id = video.get("video_id")
+    if video_id and video.get("publish_at"):
+        http = yt.make_http()
+        try:
+            yt.set_publish_at(ctx.settings, http, video_id, None)
+        except yt.YouTubeError as exc:
+            raise HTTPException(409 if isinstance(exc, yt.Refused) else 502, str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"YouTube could not be reached ({exc}).") from exc
+        finally:
+            http.close()
+    with ctx.session() as s:
+        clip = s.get(Clip, clip_id)
+        new = {**(clip.youtube or {}), "publish_at": None, "planned_publish_at": None, "schedule_note": None,
+               "unscheduled": iso(utcnow())}
+        if not video_id:
+            new["state"] = None
+        clip.youtube = new
+        s.commit()
+        data = clip_to_dict(clip)
+    ctx.bus.publish({"type": "project", "id": project_id})
     return data

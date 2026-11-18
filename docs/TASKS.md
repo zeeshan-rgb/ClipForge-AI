@@ -45,6 +45,55 @@ Shorts only.
 - [ ] 11.8 Performance feedback loop
 - [ ] 11.10 Unified creator studio
 
+## Shorts quality and growth (requested 2026-11-18)
+
+From the owner's "end-to-end video quality" brief (Future RoadMap.txt) and their
+request for 2 Shorts a day for US, UK, Australian and Indian viewers.
+`[x]` built and tested · `[~]` built in part · `[ ]` not built
+
+- [x] **Opening hook.** Project option `hook`: auto (default), story, cold_open.
+      When the payoff comes 6 s or more into a clip, it opens with a 1–3.5 s
+      whole-word flash-forward of the payoff line, then plays the story from
+      its start in order (no line loses its setup). Single, complete clips only;
+      Strict mode never goes over for it. `duration.cold_open`. Live on Tears of
+      Steel: 1 of 5 clips got a teaser ("Move your asses!", 1.6 s, payoff 18.9 s
+      in); the others kept story order. Frames checked on the rendered preview.
+- [x] **Finishing beat.** A loud reaction starting within 0.8 s of the last word
+      is kept for up to 1.2 s (never into the next words). `duration.finishing_beat`.
+- [x] **Story checks in the quality report:** opening (first words after 1.5 s),
+      dead air (over 30% in pauses over 1.5 s) and ending (Smart Duration's
+      ending score under 60). Warnings only. `qc.story_checks`.
+- [x] **Titles** are asked to lead with the most interesting words without
+      giving away the punchline or promising what the clip does not show.
+- [x] **Posting schedule** (`schedule.py`): Shorts uploaded private with
+      YouTube's publish time; daily times in the owner's time zone; automatic
+      mode fills the next 48 h of slots with approved Shorts. Owner's settings:
+      07:30 and 21:30 IST (see README for why), category Entertainment.
+- [x] **Permissions page** (`outreach.py`, `gmail.py`): streamer permission
+      requests from the owner's Gmail, replies tracked, approval by the owner.
+- [ ] Audio re-check of uncertain caption words and hand correction (11.3/11.5).
+- [ ] Clip editor: start/end, zoom and framing adjustments, revisions (11.5).
+- [ ] Gaming HUD safe regions; scene understanding (11.2).
+- [x] **Story mode** (`story.py`, `api/story.py`, Clip editor → Story mode): the AI
+      drafts 3–4 narration lines (hook, context, reaction, outro), story cards and up
+      to 2 reaction stickers; the owner edits and records each line in the browser;
+      recordings are cleaned (rumble cut, silence trimmed, levelled to −16 LUFS) and
+      placed without overlapping. In the render the clip's own sound is lowered about
+      10 dB under the narration (measured in a test: 0.2–0.45 of its level), the music
+      ducks under it, the narration shows in a narrator box, cards and stickers are
+      drawn by the caption engine (text only, nothing to license). New check
+      "Your own narration" (warning under 4 s) in the quality report and the Shorts
+      checklist (other people's footage only); automatic scheduling waits for at
+      least 4 s of narration in the final render ("Wait for my narration", on).
+      Live: the real AI drafted lines for a Tears of Steel clip in 17 s. Not done:
+      a real microphone take rendered end to end (tested with generated tones).
+- [x] **YouTube Audio Library folder import** (Settings → Music library): copies,
+      analyses and records the Audio Library licence; first-guess moods from tempo,
+      beat strength, level and title words (no AI). Tested on generated tracks only.
+- [ ] The benchmark Short `Test_Video_Sapnap_08.mp4` was not supplied; nothing
+      was measured against it. Word accuracy and ±100 ms timing targets need a
+      manually verified transcript, which does not exist yet.
+
 ## Smart Duration and context-aware clip splitting
 
 Requested 2026-11-15. **The core was built in Phase 5 (2026-11-15).** The

@@ -13,12 +13,13 @@ from sqlalchemy import func, select
 from ..context import AppContext, get_ctx
 from ..ingest import detect_platform
 from ..media import VIDEO_EXTENSIONS
-from ..models import Clip, Job, Moment, Project, Track, TranscriptSegment
+from ..models import Clip, Job, Moment, Project, Streamer, Track, TranscriptSegment
 from ..exports import blocker as export_blocker
 from ..exports import export_clip, export_folder
 from ..metadata import clean_hashtags
 from ..moments import score_parts
 from ..pipelines import default_link_title, plan_project_music, reselect, reset_analysis, track_info
+from .. import outreach
 from ..rights import download_blocker, write_rights_file
 from ..captions import CaptionStyle
 from ..schemas import (
@@ -101,6 +102,18 @@ def create_project(body: ProjectCreate, ctx: AppContext = Depends(get_ctx)) -> d
         rights_note=_clean(body.rights_note),
         options=body.options.model_dump(),
     )
+    # Permission recorded on the Permissions page: chosen by the owner, or plain from the link itself.
+    with ctx.session() as s:
+        streamer = None
+        if body.permission_id is not None:
+            streamer = s.get(Streamer, body.permission_id)
+            if streamer is None or streamer.status != "approved":
+                raise HTTPException(422, "That streamer has not given permission (see the Permissions page).")
+        elif body.source == "url" and body.rights_status == "unverified":
+            streamer = outreach.approved_for_link(s, body.url or "")
+        if streamer is not None:
+            common.update(creator=streamer.name or streamer.handle, rights_status="creator_permission",
+                          rights_note=outreach.evidence_note(streamer), permission_id=streamer.id)
 
     if body.source == "local":
         path = _video_path(body.path)
@@ -119,7 +132,7 @@ def create_project(body: ProjectCreate, ctx: AppContext = Depends(get_ctx)) -> d
             raise HTTPException(
                 422, "Paste a YouTube, Twitch or Kick video link. For anything else, use a local file."
             )
-        blocker = download_blocker(body.rights_status, common["creator"], common["rights_note"])
+        blocker = download_blocker(common["rights_status"], common["creator"], common["rights_note"])
         project = Project(
             title=_clean(body.title) or default_link_title(platform),
             source_kind=platform,
@@ -160,6 +173,8 @@ def update_rights(project_id: int, body: RightsUpdate, ctx: AppContext = Depends
         project = s.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "Project not found")
+        if body.rights_status != project.rights_status or body.rights_status != "creator_permission":
+            project.permission_id = None  # the owner changed the record by hand
         project.rights_status = body.rights_status
         project.creator = _clean(body.creator)
         project.rights_note = _clean(body.rights_note)
@@ -425,6 +440,7 @@ def clip_to_dict(c: Clip) -> dict:
         "framing": _framing_view(c.framing),
         "final": _final_view(c.final),
         "meta": c.meta,
+        "story": c.story,
         "exported": c.exported,
         "youtube": {k: v for k, v in (c.youtube or {}).items() if k != "session"} or None,
         "export_blocker": export_blocker(c) if c.final else None,

@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     speech_detection: str = "sensitive"
     transcript_chunk_seconds: int = 600
 
+    # Permission requests: how often the background sender looks for work (0 = off).
+    outreach_interval_seconds: int = 30
+
     fonts_dir: Path = REPO_ROOT / "tools" / "fonts"
     export_dir: Path | None = None  # finished Shorts are exported here (default: data\exports)
     # OpenCV's YuNet face model (MIT licence), for framing the shot around faces.
@@ -88,9 +91,9 @@ class Settings(BaseSettings):
         return self.projects_dir / str(project_id)
 
     def _tool(self, name: str) -> str | None:
-        bundled = self.ffmpeg_dir / f"{name}.exe"
-        if bundled.is_file():
-            return str(bundled)
+        for bundled in (self.ffmpeg_dir / f"{name}.exe", self.ffmpeg_dir / name):
+            if bundled.is_file():
+                return str(bundled)
         return shutil.which(name)
 
     @property

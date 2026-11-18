@@ -199,6 +199,22 @@ function SmartDuration({
             ))}
           </select>
         </div>
+        <div>
+          <label className="label" htmlFor="hook">
+            Opening hook
+          </label>
+          <select
+            id="hook"
+            className="input"
+            value={value.hook ?? 'auto'}
+            onChange={(e) => set('hook', e.target.value as ProjectOptions['hook'])}
+          >
+            <option value="auto">Automatic: a 1–3 s flash-forward of the payoff when it comes late</option>
+            <option value="cold_open">Always open with the payoff's flash-forward</option>
+            <option value="story">Story order only</option>
+          </select>
+          <p className="hint">The story then plays from its start, so nothing loses its setup. Parts keep story order.</p>
+        </div>
       </div>
 
       <div className="mt-5 space-y-3">

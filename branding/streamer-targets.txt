@@ -1,0 +1,60 @@
+# English-language Just Chatting + IRL streamers on Twitch, from TwitchMetrics'
+# top 50 in each category (last 30 days, as of 17 Nov 2026).
+# Paste this whole file into Permissions → Ask a streamer → "Paste a whole list".
+# Lines starting with # are ignored. ClipForge emails the oldest first, so the
+# streamers most likely to answer come first.
+
+# --- IRL, mid-size: best chance of a reply ---
+https://www.twitch.tv/benjychavez_
+https://www.twitch.tv/miladeva
+https://www.twitch.tv/braeden
+https://www.twitch.tv/epicvoyages
+https://www.twitch.tv/carterefe
+https://www.twitch.tv/meesterkeem
+https://www.twitch.tv/ninadaddyisback
+https://www.twitch.tv/studytme
+https://www.twitch.tv/taysmcrr
+https://www.twitch.tv/nykchazza
+https://www.twitch.tv/onigiri
+https://www.twitch.tv/yurnboi
+https://www.twitch.tv/chloe__irl
+https://www.twitch.tv/rayasianboy
+
+# --- Just Chatting, mid-size ---
+https://www.twitch.tv/pleasingpoet
+https://www.twitch.tv/robcdee
+https://www.twitch.tv/arky
+https://www.twitch.tv/yugi2x
+https://www.twitch.tv/hitch
+https://www.twitch.tv/jinnytty
+https://www.twitch.tv/plaqueboymax
+https://www.twitch.tv/yourragegaming
+https://www.twitch.tv/laynalazar
+https://www.twitch.tv/angryginge13
+https://www.twitch.tv/evelynomadera
+https://www.twitch.tv/joe_bartolozzi
+https://www.twitch.tv/cdawg
+https://www.twitch.tv/ludwig
+https://www.twitch.tv/qtcinderella
+https://www.twitch.tv/ironmouse
+
+# --- Biggest names: usually managed by agencies, slower to answer ---
+https://www.twitch.tv/ddg
+https://www.twitch.tv/agent00
+https://www.twitch.tv/ishowspeed
+https://www.twitch.tv/ohnepixel
+https://www.twitch.tv/wendolynortizz
+https://www.twitch.tv/jasontheween
+https://www.twitch.tv/lacy
+https://www.twitch.tv/stableronaldo
+https://www.twitch.tv/hasanabi
+https://www.twitch.tv/zackrawrr
+
+# Left out on purpose:
+# - 24/7 rebroadcast channels (e.g. alinitytv247): ask the main channel instead.
+# - Channels whose content is often not advertiser-friendly: Shorts from them
+#   tend to earn little or nothing even with permission.
+#
+# Tip: if you find a streamer's business email yourself (YouTube "View email
+# address", their Twitch panels or Discord), put it after the link:
+# https://www.twitch.tv/name, business@example.com

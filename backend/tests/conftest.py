@@ -167,6 +167,14 @@ class FakeReasoner:
     def ask_json(self, task, schema, images=None, check=None):
         if check:
             check()
+        if "stickers" in schema.get("properties", {}):  # Story mode draft
+            self.story_tasks = getattr(self, "story_tasks", []) + [task]
+            return {"lines": [{"role": "hook", "text": "You will not believe what happens next"},
+                              {"role": "context", "text": "The streamer is about to greet chat"},
+                              {"role": "reaction", "text": "Honestly that was the best hello ever"},
+                              {"role": "outro", "text": "Follow for tomorrow's peak moment"}],
+                    "cards": [{"text": "Moments earlier", "when": "start"}],
+                    "stickers": [{"id": "no_way", "when": "at_payoff"}, {"id": "made_up", "when": "at_payoff"}]}
         if "clips" in schema.get("properties", {}):  # titles and descriptions
             self.meta_tasks.append(task)
             if self.fail_meta:
@@ -226,6 +234,7 @@ class FakeGoogle:
         self.updates: list[dict] = []
         self.expected_size = 0
         self.refuse_text = False
+        self.publish_at: str | None = None  # a scheduled publish time YouTube kept
 
     def handler(self, request):
         import httpx
@@ -269,9 +278,11 @@ class FakeGoogle:
             return httpx.Response(308, headers={"Range": f"bytes=0-{len(self.received) - 1}"})
         if url.startswith("https://www.googleapis.com/youtube/v3/videos"):
             if request.method == "GET":
-                return httpx.Response(200, json={"items": [{"id": "vid123", "status": {
-                    "privacyStatus": self.privacy, "uploadStatus": "processed", "selfDeclaredMadeForKids": False,
-                    "license": "youtube", "embeddable": True}}]})
+                st = {"privacyStatus": self.privacy, "uploadStatus": "processed", "selfDeclaredMadeForKids": False,
+                      "license": "youtube", "embeddable": True}
+                if self.publish_at:
+                    st["publishAt"] = self.publish_at
+                return httpx.Response(200, json={"items": [{"id": "vid123", "status": st}]})
             body = json.loads(request.content)
             self.updates.append(body)
             if "snippet" in body:
@@ -281,13 +292,19 @@ class FakeGoogle:
                 return httpx.Response(200, json={"id": "vid123", "snippet": body["snippet"]})
             if not self.locked_private:
                 self.privacy = body["status"]["privacyStatus"]
-            return httpx.Response(200, json={"id": "vid123", "status": {"privacyStatus": self.privacy}})
+                self.publish_at = body["status"].get("publishAt")
+            st = {"privacyStatus": self.privacy, **({"publishAt": self.publish_at} if self.publish_at else {})}
+            return httpx.Response(200, json={"id": "vid123", "status": st})
         raise AssertionError(f"unexpected request to {url}")
 
     def _done(self):
         import httpx
 
-        return httpx.Response(200, json={"id": "vid123", "status": {"privacyStatus": "private", "uploadStatus": "uploaded"}})
+        st = {"privacyStatus": "private", "uploadStatus": "uploaded"}
+        asked = (self.uploads[-1].get("status") or {}).get("publishAt") if self.uploads else None
+        if asked and not self.locked_private:
+            self.publish_at = st["publishAt"] = asked
+        return httpx.Response(200, json={"id": "vid123", "status": st})
 
 
 @pytest.fixture(autouse=True)
@@ -299,6 +316,11 @@ def no_real_google(monkeypatch):
         raise AssertionError("tests must not reach Google")
 
     monkeypatch.setattr(youtube, "make_http", refuse)
+    from clipforge import gmail, outreach
+
+    monkeypatch.setattr(gmail, "make_http", refuse)
+    monkeypatch.setattr(outreach, "make_web", refuse)
+    monkeypatch.setattr(outreach, "ytdlp_info", lambda *_a, **_k: refuse())
 
 
 @pytest.fixture
@@ -328,6 +350,7 @@ def settings(tmp_path: Path) -> Settings:
         ffmpeg_dir=REPO_ROOT / "tools" / "ffmpeg",
         fonts_dir=REPO_ROOT / "tools" / "fonts",
         frontend_dist=tmp_path / "no-dist",
+        outreach_interval_seconds=0,  # tests run the background sender's rounds themselves
     )
     s.ensure_dirs()
     return s

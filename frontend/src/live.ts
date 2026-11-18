@@ -6,6 +6,8 @@ type LiveEvent =
   | { type: 'hello'; version: string }
   | { type: 'job'; job: Job }
   | { type: 'project'; id: number }
+  | { type: 'outreach' }
+  | { type: 'schedule' }
 
 const TERMINAL = new Set(['done', 'failed', 'cancelled'])
 
@@ -66,6 +68,14 @@ export function useLiveUpdates(): boolean {
           void qc.invalidateQueries({ queryKey: ['project', event.id] })
           void qc.invalidateQueries({ queryKey: ['stats'] })
           void qc.invalidateQueries({ queryKey: ['shorts'] })
+          void qc.invalidateQueries({ queryKey: ['schedule'] })
+        } else if (event.type === 'schedule') {
+          void qc.invalidateQueries({ queryKey: ['schedule'] })
+          void qc.invalidateQueries({ queryKey: ['shorts'] })
+        } else if (event.type === 'outreach') {
+          void qc.invalidateQueries({ queryKey: ['outreach'] })
+          void qc.invalidateQueries({ queryKey: ['streamers'] })
+          void qc.invalidateQueries({ queryKey: ['approved-streamers'] })
         }
       }
       ws.onclose = () => {

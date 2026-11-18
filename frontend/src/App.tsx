@@ -7,6 +7,7 @@ import Analysis from './pages/Analysis'
 import ClipEditor from './pages/ClipEditor'
 import Dashboard from './pages/Dashboard'
 import NewProject from './pages/NewProject'
+import Permissions from './pages/Permissions'
 import ProjectDetail from './pages/ProjectDetail'
 import Settings from './pages/Settings'
 import Shorts from './pages/Shorts'
@@ -23,6 +24,7 @@ const NAV: { to: string; label: string; icon: ReactNode; end?: boolean }[] = [
   { to: '/analysis', label: 'AI analysis', icon: icon('M3.5 15.5l4-5 3 3 6-8M3.5 3.5v13h13') },
   { to: '/editor', label: 'Clip editor', icon: icon('M4 5.5h12M4 10h12M4 14.5h7M14.5 13v4M12.5 15h4') },
   { to: '/shorts', label: 'Generated Shorts', icon: icon('M6.5 3.5h7a1 1 0 011 1v11a1 1 0 01-1 1h-7a1 1 0 01-1-1v-11a1 1 0 011-1zM8.8 8v4l3.2-2z') },
+  { to: '/permissions', label: 'Permissions', icon: icon('M3.5 6l6.5 4.5L16.5 6M3.5 5.5h13v9h-13zM12.5 13l1.5 1.5 3-3') },
   { to: '/settings', label: 'Settings', icon: icon('M10 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM10 3v2M10 15v2M3 10h2M15 10h2M5 5l1.4 1.4M13.6 13.6L15 15M5 15l1.4-1.4M13.6 6.4L15 5') },
 ]
 
@@ -78,6 +80,7 @@ export default function App() {
             <Route path="/analysis/:id" element={<ProjectDetail />} />
             <Route path="/editor" element={<ClipEditor />} />
             <Route path="/shorts" element={<Shorts />} />
+            <Route path="/permissions" element={<Permissions />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Dashboard />} />
           </Routes>

@@ -36,6 +36,8 @@ class Project(Base):
     # own | licensed | creator_permission | unverified
     rights_status: Mapped[str] = mapped_column(String(30), default="unverified")
     rights_note: Mapped[str | None] = mapped_column(Text, default=None)
+    # the streamer whose recorded permission this project relies on (Permissions page)
+    permission_id: Mapped[int | None] = mapped_column(Integer, default=None)
 
     options: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     media: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
@@ -160,6 +162,8 @@ class Clip(Base):
     # pending | approved | rejected   (the user's decision)
     review: Mapped[str | None] = mapped_column(String(20), default="pending")
     overridden: Mapped[bool | None] = mapped_column(default=False)  # approved despite failing a check
+    # Story mode: the owner's narration lines (text, recording, time), story cards and stickers
+    story: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
 
     project: Mapped[Project] = relationship(back_populates="clips")
 
@@ -249,3 +253,44 @@ class Setting(Base):
 
     key: Mapped[str] = mapped_column(String(80), primary_key=True)
     value: Mapped[Any] = mapped_column(JSON)
+
+
+class Streamer(Base):
+    """A creator the owner asked (or will ask) for permission to clip, and what came of it."""
+
+    __tablename__ = "streamers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    url: Mapped[str] = mapped_column(Text)
+    platform: Mapped[str] = mapped_column(String(20))  # youtube | twitch | kick
+    handle: Mapped[str | None] = mapped_column(String(120), default=None)
+    name: Mapped[str | None] = mapped_column(String(200), default=None)
+    followers: Mapped[int | None] = mapped_column(Integer, default=None)
+    channel_id: Mapped[str | None] = mapped_column(String(120), default=None)
+    channel_url: Mapped[str | None] = mapped_column(Text, default=None)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+    # public links and contact addresses found, each with where it was found
+    links: Mapped[list[Any] | None] = mapped_column(JSON, default=None)
+    emails: Mapped[list[Any] | None] = mapped_column(JSON, default=None)
+    contact_email: Mapped[str | None] = mapped_column(String(320), default=None)
+
+    # looking_up | no_contact | queued | sent | followed_up | replied | approved | declined
+    # | no_reply | bounced | failed | paused
+    status: Mapped[str] = mapped_column(String(30), default="looking_up")
+    status_detail: Mapped[str | None] = mapped_column(Text, default=None)
+    subject: Mapped[str | None] = mapped_column(Text, default=None)
+    body: Mapped[str | None] = mapped_column(Text, default=None)
+
+    thread_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    first_message_id: Mapped[str | None] = mapped_column(Text, default=None)  # Message-ID header, for the follow-up
+    sent_at: Mapped[datetime | None] = mapped_column(default=None)
+    followup_at: Mapped[datetime | None] = mapped_column(default=None)
+    checked_at: Mapped[datetime | None] = mapped_column(default=None)
+    reply: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+
+    evidence: Mapped[str | None] = mapped_column(Text, default=None)  # what the owner recorded when approving
+    conditions: Mapped[str | None] = mapped_column(Text, default=None)  # e.g. "no monetisation"
+    decided_at: Mapped[datetime | None] = mapped_column(default=None)
+
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)

@@ -41,7 +41,8 @@ from . import moment_quality
 from . import qc
 from . import youtube as yt
 from .ai.base import AIError
-from .captions import build_captions, clip_words, credit_tag_text, label_size, part_label_text, tag_size
+from . import story as story_mod
+from .captions import build_captions, clip_words, credit_tag_text, label_size, part_label_text, tag_size, to_ass
 from .duration import ClipPlan, Context, DurationSettings, Word, plan_moment
 from .framing import (
     LAYOUT_LABELS,
@@ -76,7 +77,11 @@ from .media import (
     run,
     tool_version,
 )
-from .models import Clip, Job, Moment, Project, Setting, Track, TranscriptSegment, iso, utcnow
+from datetime import timedelta
+
+from . import outreach
+from . import schedule as schedule_mod
+from .models import Clip, Job, Moment, Project, Setting, Streamer, Track, TranscriptSegment, iso, utcnow
 from .music import (
     MIN_GAP_DB,
     TrackInfo,
@@ -158,9 +163,30 @@ def _metadata(ctx: StageContext) -> dict:
         project.source_meta = meta.to_dict()
         if meta.title and project.title == default_link_title(kind):
             project.title = meta.title[:300]
+        refusal = _permission_mismatch(s, project, meta)
+        if refusal:
+            project.rights_status, project.permission_id = "unverified", None
+            project.rights_note = refusal
+            write_rights_file(ctx.settings, project)
         s.commit()
     ctx.publish_project()
+    if refusal:
+        raise IngestRefused(refusal, "rights", hint=False)
     return meta.to_dict()
+
+
+def _permission_mismatch(s, project: Project, meta) -> str | None:
+    """A permission recorded for one streamer must not cover someone else's video."""
+    if project.permission_id is None:
+        return None
+    streamer = s.get(Streamer, project.permission_id)
+    who = (streamer.name or streamer.handle) if streamer else "that streamer"
+    if streamer is None or streamer.status != "approved":
+        return f"Not downloaded: the permission from {who} is no longer recorded as approved."
+    if outreach.belongs_to(streamer, meta.creator, meta.creator_url) is False:
+        return (f"Not downloaded: this video is from “{meta.creator or meta.creator_url}”, not from {who}, "
+                "whose permission was recorded. Choose the right streamer, or record this creator's permission.")
+    return None
 
 
 def _download(ctx: StageContext) -> dict:
@@ -890,17 +916,24 @@ def _render_clip(ctx: StageContext, c: dict, words: list, tracks: dict, options:
     placement = place_text(plan, samples, style.position, style.size, style.outline,
                            (label_text, *label_size(label_text)) if label_text else None,
                            (tag_text, *tag_size(tag_text)) if tag_text else None)
-    lo, hi = segments[0][0], segments[-1][1]
+    lo, hi = min(a for a, _ in segments), max(b for _, b in segments)  # a teaser may come first
     nearby = [w for w in words if float(w["e"]) > lo and float(w["s"]) < hi]
     result = build_captions(nearby, [list(seg) for seg in segments], length, style_in,
                             position=placement["caption_position"], label=placement["label"],
                             tag=placement["tag"])
+    story = story_mod.normalise(c.get("story"))
+    ass_text = result.ass
+    if story["lines"] or story["cards"] or story["stickers"]:
+        ass_text = story_mod.add_to_ass(ass_text or to_ass([], style), story, length)
     ass_path = None
-    if result.ass:
+    if ass_text:
         ass_path = out_dir / f"{stem}.ass"
-        ass_path.write_text(result.ass, encoding="utf-8")
+        ass_path.write_text(ass_text, encoding="utf-8")
     speech = [(w.s, w.e) for w in clip_words(nearby, [list(seg) for seg in segments])]
-    spec, music = _prepare_mix(ctx.settings, out_dir, stem, c["music"], tracks, speech, length)
+    # the music ducks under the owner's narration as it does under the speech
+    narration = story_mod.windows(story)
+    spec, music = _prepare_mix(ctx.settings, out_dir, stem, c["music"], tracks, sorted(speech + narration), length)
+    voice = story_mod.build_voice(ctx.settings, story, length, out_dir, stem)
     has_audio = bool(media.get("has_audio", True))
     channels = int(media.get("audio_channels") or 2)
     width = OUT_W if final else 540
@@ -911,7 +944,7 @@ def _render_clip(ctx: StageContext, c: dict, words: list, tracks: dict, options:
         gain = limit = None
         if final and (has_audio or spec is not None):
             before = measure_loudness(ctx.settings, video, segments, has_audio=has_audio, music=spec,
-                                      audio_channels=channels)
+                                      audio_channels=channels, voice=voice)
             if before and before.get("lufs") is not None:
                 gain = max(-20.0, min(MAX_BOOST_DB, TARGET_LUFS - before["lufs"]))
             limit = PEAK_CEILING
@@ -919,7 +952,7 @@ def _render_clip(ctx: StageContext, c: dict, words: list, tracks: dict, options:
                         "gain_db": None if gain is None else round(gain, 2), "target_lufs": TARGET_LUFS}
         render_framed(ctx.settings, video, dest, segments, drawer(plan, width, scale), size, ass_path,
                       width=width, fps=fps, has_audio=has_audio, music=spec, audio_channels=channels, final=final,
-                      gain_db=gain, peak_limit=limit, check=ctx.check, on_progress=on_progress)
+                      gain_db=gain, peak_limit=limit, check=ctx.check, on_progress=on_progress, voice=voice)
         if loudness is not None:
             # AAC can push a dense, loud mix up to 2 dB over the limiter's ceiling. If the encoded file
             # peaks too high, encode its sound again with the ceiling lowered by the overshoot.
@@ -930,18 +963,24 @@ def _render_clip(ctx: StageContext, c: dict, words: list, tracks: dict, options:
                     break
                 ceiling_db -= tp - MAX_TRUE_PEAK + 0.2
                 replace_audio(ctx.settings, dest, video, segments, has_audio=has_audio, music=spec,
-                              audio_channels=channels, gain_db=gain, peak_limit=10 ** (ceiling_db / 20))
+                              audio_channels=channels, gain_db=gain, peak_limit=10 ** (ceiling_db / 20), voice=voice)
             loudness["ceiling_db"] = round(ceiling_db, 2)
         if spec is not None and music is not None and not final:
             music = {**music, "measured": _measure_mix(ctx.settings, out_dir, stem, spec, music, speech, length)}
     finally:
         if spec is not None and spec.envelope is not None:
             spec.envelope.unlink(missing_ok=True)
+        if voice is not None:
+            voice.stem.unlink(missing_ok=True)
+            voice.duck.unlink(missing_ok=True)
         if final and ass_path is not None:
             ass_path.unlink(missing_ok=True)
     return {"result": result, "music": music, "placement": placement, "plan": plan, "style": style_in,
-            "loudness": loudness, "fps": fps, "speech": speech, "gain": gain, "channels": channels,
-            "has_audio": has_audio, "music_used": spec is not None}
+            "loudness": loudness, "fps": fps, "gain": gain, "channels": channels,
+            # the streamer's speech, less where the owner narrates over it (the clip's sound is lowered there)
+            "speech": [(a, b) for a, b in speech if not any(a < ne + 0.2 and b > ns - 0.2 for ns, ne in narration)],
+            "has_audio": has_audio, "music_used": spec is not None, "voice_used": voice is not None,
+            "story": story_mod.contribution(story, length), "narration": narration}
 
 
 def _credit(project: Project) -> str | None:
@@ -955,7 +994,8 @@ def _clip_rows(s: Session, project_id: int) -> list[dict]:
     return [
         {"id": c.id, "rank": c.rank or 0, "part": c.part or 1, "parts": c.parts or 1, "review": c.review,
          "segments": [tuple(seg) for seg in (c.segments or [])], "duration": float(c.duration or 0),
-         "music": dict(c.music) if c.music else None, "framing": dict(c.framing) if c.framing else None}
+         "music": dict(c.music) if c.music else None, "framing": dict(c.framing) if c.framing else None,
+         "story": dict(c.story) if c.story else None}
         for c in s.scalars(select(Clip).where(Clip.project_id == project_id).order_by(Clip.rank, Clip.part, Clip.id)).all()
     ]
 
@@ -1123,7 +1163,14 @@ def _upload(ctx: StageContext) -> dict:
                 if why:
                     raise yt.Refused(why)
                 file = Path(clip.final["file"])
-                body = yt.video_body(clip.meta, defaults["category_id"], defaults["made_for_kids"])
+                planned = (clip.youtube or {}).get("publish_at")
+                publish_at = None
+                if planned:
+                    at = schedule_mod._parse(planned)
+                    if at <= utcnow() + timedelta(minutes=5):
+                        raise yt.Refused("Its publish time has passed; schedule it again.")
+                    publish_at = schedule_mod.to_api(at)
+                body = yt.video_body(clip.meta, defaults["category_id"], defaults["made_for_kids"], publish_at)
                 session_url = (clip.youtube or {}).get("session")
 
             def keep_session(url: str, clip_id: int = clip_id) -> None:
@@ -1139,9 +1186,18 @@ def _upload(ctx: StageContext) -> dict:
             video = yt.upload(ctx.settings, http, file, body, session=session_url, on_session=keep_session,
                               on_progress=tick, check=ctx.check)
             token = yt.load_token(ctx.settings) or {}
+            kept = (video.get("status") or {}).get("publishAt")
             with ctx.session() as s:
                 clip = s.get(Clip, clip_id)
+                planned = (clip.youtube or {}).get("publish_at")
+                schedule_note = None
+                if planned and not kept:
+                    schedule_note = ("YouTube did not keep the publish time, so this Short stays private. Videos from "
+                                     "a Google Cloud project YouTube has not audited stay private; publish it in "
+                                     "YouTube Studio, or apply for the audit.")
                 clip.youtube = {
+                    "publish_at": planned if kept or not planned else None, "planned_publish_at": planned,
+                    "schedule_note": schedule_note, "scheduled_by": (clip.youtube or {}).get("scheduled_by"),
                     "video_id": video["id"], "url": yt.shorts_url(video["id"]), "studio_url": yt.studio_url(video["id"]),
                     "privacy": (video.get("status") or {}).get("privacyStatus", "private"),
                     "upload_status": (video.get("status") or {}).get("uploadStatus"),
@@ -1191,8 +1247,10 @@ def check_final(settings, dest: Path, c: dict, extra: dict, done: dict, src: tup
     quality = qc.run_checks(
         info=info, scan=scan, clip_duration=c["duration"], out_size=(OUT_W, OUT_H), loudness=loud,
         loudness_ok=loudness_verdict(loud), music_used=done["music_used"], gap=gap,
-        expect_sound=done["has_audio"] or done["music_used"], captions=extra["captions"], report=extra["report"],
+        expect_sound=done["has_audio"] or done["music_used"] or done.get("voice_used", False),
+        captions=extra["captions"], report=extra["report"],
         valid=extra["valid"], overridden=extra["overridden"], others=others, rights_status=rights,
+        speech=sorted((done.get("speech") or []) + (done.get("narration") or [])), story=done.get("story"),
     )
     if gap is not None:
         quality["music_gap"] = gap
@@ -1252,7 +1310,7 @@ def _final(ctx: StageContext) -> dict:
             "checks": [{"name": x["label"], "ok": x["status"] != "fail", "status": x["status"], "detail": x["detail"]}
                        for x in quality["checks"]],
             "passed": quality["passed"], "score": quality["score"],
-            "rights_status": rights, "rendered_at": iso(utcnow()),
+            "rights_status": rights, "rendered_at": iso(utcnow()), "story": done.get("story"),
         }
         made += 1
         with ctx.session() as s:

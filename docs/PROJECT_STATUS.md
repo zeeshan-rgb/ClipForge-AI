@@ -33,6 +33,26 @@ channel has not been tried yet: it needs the owner's Google Cloud client.
 | 9 | Quality checks, titles and descriptions, export | Done |
 | 10 | YouTube publishing | Built; refusal gate passed; private upload not done (owner chose to skip it; optional) |
 
+## 2026-11-18 (macOS copy, owner Meeran)
+
+Runs on macOS (Homebrew ffmpeg-full, Python 3.12, Antigravity CLI). Added: the
+Permissions page (streamer requests from Gmail), the posting schedule (2 a day,
+07:30 and 21:30 IST), the flash-forward hook, the finishing beat and story
+checks. YouTube connected to "Peak Stream Moment"; no Short uploaded yet.
+535 automated tests pass. See TASKS.md, "Shorts quality and growth".
+
+**Merged into the Windows copy on 2026-11-18** (as one squashed change, so the
+commit carries the Windows owner's identity). Reviewed before applying; the
+new code has no hard-coded secrets and nothing was run from the other copy.
+545 tests in all; the first full run had 5 failures, all in the posting
+schedule, because Windows has no time-zone database. Fixed by adding the
+`tzdata` package (Windows only in `requirements.txt`). Points the owner should
+decide, found in review: the Permissions page sends email on its own by
+default (`auto_send`) and fetches pages with a browser-like User-Agent, which
+the architecture notes rule out; the posting schedule's automatic mode
+publishes at set times on the owner's standing consent. The Gmail, YouTube and
+schedule features do nothing until the owner connects those accounts.
+
 ## Next
 
 Phase 11 (Creator Studio) is planned in [PHASE11_PLAN.md](PHASE11_PLAN.md)

@@ -323,6 +323,15 @@ def shorts_checklist(
             add(_item("quality", "Quality checks", "fail", f"Failed: {bad}.", overridable=True))
         else:
             add(_item("quality", "Quality checks", "ok", f"Score {qc.get('score', '—')}."))
+        if rights_status != "own":
+            told = final.get("story") or {}
+            secs = float(told.get("seconds") or 0)
+            if secs >= 4:
+                add(_item("original", "Your own commentary", "ok", f"{secs:.0f} s of your narration."))
+            else:
+                add(_item("original", "Your own commentary", "warn",
+                          "Little or no narration of yours in the final Short. YouTube's reused-content policy "
+                          "looks for original commentary on other people's footage; record the Story lines."))
 
     if not title:
         add(_item("title", "Title", "fail", "The Short has no title."))
@@ -392,13 +401,18 @@ def _clean(text: str) -> str:
     return text.replace("<", "‹").replace(">", "›")  # YouTube refuses angle brackets in titles and descriptions
 
 
-def video_body(meta: dict[str, Any], category_id: str, made_for_kids: bool) -> dict[str, Any]:
+def video_body(meta: dict[str, Any], category_id: str, made_for_kids: bool,
+               publish_at: str | None = None) -> dict[str, Any]:
+    """The upload's metadata. Always private; with `publish_at` (RFC 3339, UTC) YouTube makes it public then."""
     tags = [t.lstrip("#") for t in meta.get("hashtags") or [] if t.lstrip("#").lower() != "shorts"]
+    status = {"privacyStatus": "private", "selfDeclaredMadeForKids": bool(made_for_kids),
+              "containsSyntheticMedia": False}
+    if publish_at:
+        status["publishAt"] = publish_at
     return {
         "snippet": {"title": _clean(meta["title"])[:100], "description": _clean(meta.get("description") or "")[:5000],
                     "tags": tags[:15], "categoryId": str(category_id)},
-        "status": {"privacyStatus": "private", "selfDeclaredMadeForKids": bool(made_for_kids),
-                   "containsSyntheticMedia": False},
+        "status": status,
     }
 
 
@@ -490,6 +504,29 @@ def set_privacy(settings, http: httpx.Client, video_id: str, privacy: str) -> di
         if resp.status_code in (400, 403):
             raise Refused(f"YouTube refused the change: {_google_error(resp)}")
         raise YouTubeError(f"Could not change the video: {_google_error(resp)}")
+    return resp.json().get("status") or {}
+
+
+def set_publish_at(settings, http: httpx.Client, video_id: str, publish_at: str | None) -> dict[str, Any]:
+    """Give a private video a publish time (or take it away), keeping the rest of its status."""
+    token = access_token(settings, http)
+    current = video_status(settings, http, video_id)
+    if current is None:
+        raise Refused("This video is no longer on your channel.")
+    st = current.get("status") or {}
+    if st.get("privacyStatus") != "private":
+        raise Refused("Only a private video can be scheduled; this one is already " + str(st.get("privacyStatus")) + ".")
+    keep = {k: v for k, v in st.items() if k in ("privacyStatus", "selfDeclaredMadeForKids", "license", "embeddable",
+                                               "publicStatsViewable", "containsSyntheticMedia")}
+    body = {**keep, "privacyStatus": "private"}
+    if publish_at:
+        body["publishAt"] = publish_at
+    resp = http.put(f"{API}/videos", params={"part": "status"}, headers=_auth(token),
+                    json={"id": video_id, "status": body})
+    if resp.status_code in (400, 403):
+        raise Refused(f"YouTube refused the publish time: {_google_error(resp)}")
+    if resp.status_code != 200:
+        raise YouTubeError(f"Could not change the publish time: {_google_error(resp)}")
     return resp.json().get("status") or {}
 
 

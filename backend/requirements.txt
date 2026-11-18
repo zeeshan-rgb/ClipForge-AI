@@ -8,6 +8,8 @@ python-multipart
 sqlalchemy>=2
 pydantic-settings
 httpx
+# time zones for the posting schedule: Windows has no system time-zone database
+tzdata; sys_platform == "win32"
 
 # ingestion
 yt-dlp

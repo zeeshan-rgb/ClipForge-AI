@@ -103,8 +103,10 @@ def task(clips: list[ClipText], source: Source) -> str:
 The long video is called "{source.original_title or source.title or 'untitled'}".
 
 For each clip below write:
-- title: at most {TITLE_AIM} characters, in {lang}. Say what happens in the clip so a viewer wants to watch.
-  Only claim what the words and the reason show. No made-up facts, names or numbers, no ALL CAPS, at most one emoji.
+- title: at most {TITLE_AIM} characters, in {lang}. Make a viewer curious to see what happens, with the most
+  interesting words first (only the start shows in the Shorts feed), but do not give away the punchline.
+  Only claim what the words and the reason show: never promise something the clip does not deliver.
+  No made-up facts, names or numbers, no ALL CAPS, at most one emoji.
 - description: one or two short sentences in {lang} about what happens. Do not add links, credits or hashtags;
   those are added separately.
 - hashtags: 3 to 6 relevant hashtags, each one word, without spaces, starting with #. Do not include #Shorts.

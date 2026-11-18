@@ -40,6 +40,9 @@ class ProjectOptions(BaseModel):
     max_parts: int = Field(default=3, ge=2, le=5)
     context: Literal["tight", "balanced", "full"] = "balanced"
     trim_silence: bool = True
+    # How a Short opens: auto = a short flash-forward of the payoff when it comes late,
+    # story = always in story order, cold_open = always open with the payoff's teaser.
+    hook: Literal["auto", "story", "cold_open"] = "auto"
 
     # Phase 6: one caption style per project, so every clip and every part matches
     caption_style: CaptionStyle = Field(default_factory=CaptionStyle)
@@ -82,7 +85,7 @@ class ProjectOptions(BaseModel):
         return DurationSettings(
             target=float(self.target_duration), mode=self.duration_mode, tolerance=self.tolerance_pct / 100,
             split=self.split_parts, max_parts=self.max_parts, context=self.context,
-            trim_silence=self.trim_silence,
+            trim_silence=self.trim_silence, hook=self.hook,
         )
 
 
@@ -103,6 +106,8 @@ class ProjectCreate(BaseModel):
     rights_status: RightsStatus = "unverified"
     rights_note: str | None = Field(default=None, max_length=2000)
     options: ProjectOptions = Field(default_factory=ProjectOptions)
+    # use the permission recorded for this streamer on the Permissions page
+    permission_id: int | None = None
 
 
 class RightsUpdate(BaseModel):
@@ -209,6 +214,7 @@ def project_to_dict(p: Project, *, clip_count: int = 0) -> dict[str, Any]:
         "creator": p.creator,
         "rights_status": p.rights_status,
         "rights_note": p.rights_note,
+        "permission_id": p.permission_id,
         "options": normalise_options(p.options),
         "media": p.media,
         "has_thumbnail": bool(p.thumbnail),

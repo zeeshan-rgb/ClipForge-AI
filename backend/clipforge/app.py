@@ -16,6 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .api import jobs as jobs_api
 from .api import music as music_api
+from .api import outreach as outreach_api
+from .api import story as story_api
 from .api import projects as projects_api
 from .api import system as system_api
 from .api import youtube as youtube_api
@@ -24,6 +26,7 @@ from .context import AppContext
 from .db import make_engine, make_session_factory
 from .events import EventBus
 from .jobs.engine import JobWorker, Pipeline
+from .outreach import OutreachWorker
 from .pipelines import PIPELINES
 
 log = logging.getLogger("clipforge")
@@ -68,16 +71,19 @@ def create_app(
     session = make_session_factory(engine)
     bus = EventBus()
     worker = JobWorker(settings, session, bus, pipelines or PIPELINES)
-    ctx = AppContext(settings=settings, engine=engine, session=session, bus=bus, worker=worker)
+    outreach = OutreachWorker(settings, session, bus, settings.outreach_interval_seconds, job_worker=worker)
+    ctx = AppContext(settings=settings, engine=engine, session=session, bus=bus, worker=worker, outreach=outreach)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         worker.start()
+        outreach.start()
         log.info("ClipForge AI %s started; data in %s", __version__, settings.data_dir)
         try:
             yield
         finally:
             await asyncio.to_thread(worker.stop)
+            await asyncio.to_thread(outreach.stop)
             engine.dispose()
             log.info("ClipForge AI stopped")
 
@@ -99,6 +105,8 @@ def create_app(
     app.include_router(projects_api.router)
     app.include_router(projects_api.shorts_router)
     app.include_router(youtube_api.router)
+    app.include_router(outreach_api.router)
+    app.include_router(story_api.router)
     app.include_router(jobs_api.router)
 
     @app.websocket("/api/ws")

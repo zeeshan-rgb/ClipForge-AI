@@ -52,6 +52,10 @@ LABELS = {
     "caption_confidence": "Captions heard clearly",
     "cut_words": "Starts and ends on whole sentences",
     "duplicate": "Not a repeat of another clip",
+    "opening": "Strong opening (words in the first seconds)",
+    "ending": "Ends naturally",
+    "dead_air": "Little dead air",
+    "original": "Your own narration (original commentary)",
     "rights": "Rights allow publishing",
 }
 
@@ -219,11 +223,88 @@ def similarity(a: list[str], b: list[str]) -> float:
     return len(sa & sb) / len(sa | sb)
 
 
+OPENING_LATE = 1.5  # first words later than this into a Short: a weak opening (viewers decide in the first seconds)
+ENDING_WEAK = 60  # Smart Duration's ending score under this: the end may feel abrupt
+DEAD_AIR_SHARE = 0.3  # more than this share of the Short without speech, in gaps over 1.5 s
+DEAD_AIR_GAP = 1.5
+
+
+def story_checks(report: dict | None, speech: list[tuple[float, float]] | None, length: float) -> list[Check]:
+    """How the Short opens and ends, and how much of it is dead air. Warnings only: the owner decides.
+
+    Measured from the word timings inside the Short and Smart Duration's own
+    boundary scores; a talking-free moment (no speech at all) is not judged here.
+    """
+    out: list[Check] = []
+    report = report or {}
+    words = sorted(speech or [])
+    hook = report.get("hook") or {}
+    if words:
+        first = words[0][0]
+        if hook.get("strategy") == "cold_open":
+            out.append(ok("opening", f"Opens with a {hook.get('seconds', 0):.1f} s flash-forward of the payoff."))
+        elif first > OPENING_LATE:
+            out.append(warn("opening", f"Weak opening: the first words come {first:.1f} s in. Viewers decide in the "
+                                       "first seconds; consider the cold-open hook or a tighter start."))
+        else:
+            out.append(ok("opening", f"Speech starts {first:.1f} s in."))
+        quiet, cursor = 0.0, 0.0
+        for s, e in words:
+            if s - cursor > DEAD_AIR_GAP:
+                quiet += s - cursor
+            cursor = max(cursor, e)
+        if length - cursor > DEAD_AIR_GAP + (report.get("finishing_beat") or 0):
+            quiet += length - cursor - (report.get("finishing_beat") or 0)
+        share = quiet / length if length else 0.0
+        if share > DEAD_AIR_SHARE:
+            out.append(warn("dead_air", f"{share:.0%} of the Short has no speech in pauses over {DEAD_AIR_GAP:.1f} s."))
+        else:
+            out.append(ok("dead_air", f"{share:.0%} of the Short is pauses over {DEAD_AIR_GAP:.1f} s."))
+    eq = report.get("ending_quality")
+    if eq is not None:
+        if eq < ENDING_WEAK:
+            keys = ("end", "question", "loud", "talking", "follow", "trails", "payoff", "pause")
+            problems = "; ".join(p for p in report.get("problems") or [] if any(k in p for k in keys)) \
+                or "the last line is not a clean stop"
+            out.append(warn("ending", f"The ending may feel abrupt ({eq}/100): {problems}."))
+        else:
+            beat = report.get("finishing_beat")
+            out.append(ok("ending", f"Ends on a finished line ({eq}/100)"
+                                    + (f", keeping the {beat:.1f} s reaction after it." if beat else ".")))
+    return out
+
+
+ORIGINAL_MIN_SECONDS = 4.0
+
+
+def contribution_check(story: dict | None) -> Check:
+    """Is there enough of the owner's own narration? YouTube's reused-content policy looks for original commentary.
+
+    A warning, never a fail: the owner may post their own footage without narration. Whether a channel is
+    monetised is YouTube's decision; this only reports what the Short contains.
+    """
+    story = story or {}
+    secs, lines = float(story.get("seconds") or 0), int(story.get("lines") or 0)
+    extras = [f"{story.get('cards')} card(s)" if story.get("cards") else "",
+              f"{story.get('stickers')} sticker(s)" if story.get("stickers") else ""]
+    extra = ", ".join(e for e in extras if e)
+    if secs >= ORIGINAL_MIN_SECONDS:
+        return ok("original", f"{secs:.0f} s of your narration in {lines} line(s)" + (f", plus {extra}" if extra else "")
+                  + ".")
+    if secs > 0:
+        return warn("original", f"Only {secs:.1f} s of your narration. Add a context or reaction line: "
+                                "YouTube's reused-content policy looks for original commentary.")
+    return warn("original", "Reused-content risk: no narration of yours. Record the Story lines (Clip editor) so the "
+                            "Short carries your own commentary" + (f"; cards and stickers alone ({extra}) are not enough."
+                                                                   if extra else "."))
+
+
 def run_checks(
     *, info: dict[str, Any], scan: Scan, clip_duration: float, out_size: tuple[int, int],
     loudness: dict[str, Any] | None, loudness_ok: tuple[bool, str] | None, music_used: bool,
     gap: dict[str, Any] | None, expect_sound: bool, captions: dict | None, report: dict | None, valid: bool,
     overridden: bool, others: list[list[str]], rights_status: str,
+    speech: list[tuple[float, float]] | None = None, story: dict | None = None,
 ) -> dict[str, Any]:
     checks: list[Check] = []
     W, H = out_size
@@ -335,6 +416,10 @@ def run_checks(
     else:
         why = (report or {}).get("no_fit") or "; ".join((report or {}).get("problems") or []) or "it did not pass its checks"
         checks.append((warn if overridden else fail)("cut_words", ("Approved anyway: " if overridden else "") + why))
+
+    checks += story_checks(report, speech, clip_duration)
+    if story is not None:  # only when the render reports it (direct file checks do not know)
+        checks.append(contribution_check(story))
 
     mine = words_of(captions)
     worst = max((similarity(mine, o) for o in others), default=0.0)
